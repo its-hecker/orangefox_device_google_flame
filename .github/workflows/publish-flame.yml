@@ -42,10 +42,11 @@ jobs:
             [[ $(gh release view "$tag" --json isDraft --jq .isDraft) = true ]]
             gh release upload "$tag" tested-artifact/* --clobber
           fi
-          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ' .[] | select(.tag_name == "R12.0-flame-unofficial-20261015") ')
           printf '%s' "$release_json" | python3 -c '
           import json,sys
           r=json.load(sys.stdin)
+          assert r["target_commitish"] == "087074222fd0be43b5f32115e198f5fb2825ee14"
           assets={a["name"]:a for a in r["assets"]}
           expected={"OrangeFox-unofficial-flame.img","SHA256SUMS","source-manifest.xml","kernel-metadata.json","device-tree-commit.txt","port-provenance.json"}
           assert expected == set(assets), "Release assets differ from the tested build"
@@ -53,8 +54,8 @@ jobs:
           assert assets["OrangeFox-unofficial-flame.img"].get("digest") == "sha256:175a22f205257bf030a942bfe8559e3a4d7b7b886046d86890849d488e8435a9"
           print("Release asset names, image size and uploaded image digest verified")
           '
-          [[ $(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha) = "$source_sha" ]]
           gh release edit "$tag" --draft=false --latest \
             --title 'OrangeFox R12.0 Unofficial — Flame — V1.0' \
             --notes-file release/notes-2026-10-15.md
+          [[ $(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha) = "$source_sha" ]]
           gh release view "$tag" --json url,isDraft,tagName
