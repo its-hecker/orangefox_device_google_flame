@@ -1,0 +1,60 @@
+name: Publish tested Flame release
+on:
+  push:
+    branches: [release-flame]
+    paths: ['release/**', '.github/workflows/publish-flame.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-flame-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download the exact tested build without rebuilding
+        uses: actions/download-artifact@v7
+        with:
+          name: OrangeFox-unofficial-flame-38755289038-1
+          run-id: 38755289038
+          github-token: ${{ github.token }}
+          path: tested-artifact/
+      - name: Verify artifact and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" = its-hecker/orangefox_device_google_flame ]]
+          [[ $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/38755289038" --jq .conclusion) = success ]]
+          python3 release/verify-tested-artifact.py tested-artifact
+          tag=R12.0-flame-unofficial-20261015
+          source_sha=087074222fd0be43b5f32115e198f5fb2825ee14
+          # Upload all files while the release is a draft; publish only when verified.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" tested-artifact/* --draft --target "$source_sha" \
+              --title 'OrangeFox R12.0 Unofficial — Flame — V1.0' \
+              --notes-file release/notes-2026-10-15.md
+          else
+            [[ $(gh release view "$tag" --json isDraft --jq .isDraft) = true ]]
+            gh release upload "$tag" tested-artifact/* --clobber
+          fi
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")
+          printf '%s' "$release_json" | python3 -c '
+          import json,sys
+          r=json.load(sys.stdin)
+          assets={a["name"]:a for a in r["assets"]}
+          expected={"OrangeFox-unofficial-flame.img","SHA256SUMS","source-manifest.xml","kernel-metadata.json","device-tree-commit.txt","port-provenance.json"}
+          assert expected == set(assets), "Release assets differ from the tested build"
+          assert assets["OrangeFox-unofficial-flame.img"]["size"] == 67108864
+          assert assets["OrangeFox-unofficial-flame.img"].get("digest") == "sha256:175a22f205257bf030a942bfe8559e3a4d7b7b886046d86890849d488e8435a9"
+          print("Release asset names, image size and uploaded image digest verified")
+          '
+          [[ $(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha) = "$source_sha" ]]
+          gh release edit "$tag" --draft=false --latest \
+            --title 'OrangeFox R12.0 Unofficial — Flame — V1.0' \
+            --notes-file release/notes-2026-10-15.md
+          gh release view "$tag" --json url,isDraft,tagName
