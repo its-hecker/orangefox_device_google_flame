@@ -1,0 +1,91 @@
+name: OrangeFox Flame
+on:
+  push:
+    branches: [main, orangefox-flame]
+    paths-ignore: [README.md, TESTING.md, 'docs/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: flame-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  prepare:
+    name: Prepare Flame source and preserve Coral history
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Import the pinned common tree on first run
+        id: source
+        run: bash scripts/materialize_tree.sh
+      - name: Validate Flame source selection
+        run: python3 scripts/validate_source.py
+  kernel:
+    name: Build and checkpoint Flame kernel
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+      - name: Prepare build host
+        run: bash scripts/prepare_host.sh
+      - name: Build pinned Floral kernel and DTBs
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+        run: bash scripts/build.sh "$RUNNER_TEMP/orangefox" kernel
+      - name: Preserve completed kernel checkpoint
+        uses: actions/upload-artifact@v6
+        with:
+          name: flame-kernel-${{ github.run_id }}
+          path: kernel-checkpoint/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+      - name: Preserve kernel logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flame-kernel-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/
+          if-no-files-found: warn
+  recovery:
+    name: Build Flame recovery with checkpoint kernel
+    needs: [prepare, kernel]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+      - name: Download completed kernel checkpoint
+        uses: actions/download-artifact@v7
+        with:
+          name: flame-kernel-${{ github.run_id }}
+          path: kernel-checkpoint/
+      - name: Prepare build host
+        run: bash scripts/prepare_host.sh
+      - name: Build and validate boot recovery
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+        run: bash scripts/build.sh "$RUNNER_TEMP/orangefox" recovery
+      - name: Preserve recovery logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: flame-recovery-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: logs/
+          if-no-files-found: warn
+      - name: Upload structurally validated Flame image
+        uses: actions/upload-artifact@v6
+        with:
+          name: OrangeFox-unofficial-flame-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error

@@ -1,0 +1,1771 @@
+diff --git a/.github/workflows/avatar-release.yml b/.github/workflows/avatar-release.yml
+deleted file mode 100644
+index 842eb0e..0000000
+--- a/.github/workflows/avatar-release.yml
++++ /dev/null
+@@ -1,141 +0,0 @@
+-name: Package and publish Coral About update
+-on:
+-  push:
+-    branches: [main]
+-    paths: [release/avatar-update.json]
+-  workflow_dispatch:
+-permissions:
+-  contents: write
+-  actions: read
+-concurrency:
+-  group: coral-release
+-  cancel-in-progress: false
+-jobs:
+-  publish:
+-    runs-on: ubuntu-22.04
+-    timeout-minutes: 15
+-    env:
+-      GH_TOKEN: ${{ github.token }}
+-      GH_REPO: ${{ github.repository }}
+-    steps:
+-      - uses: actions/checkout@v5
+-      - name: Resolve checksum-pinned source build
+-        id: base
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import json, os, subprocess
+-          p=json.load(open('release/avatar-update.json'))
+-          def api(path):
+-              return json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/{path}']))
+-          r=api(f'actions/runs/{p["base_run_id"]}')
+-          assert r['status']=='completed' and r['conclusion']=='success'
+-          assert r['head_sha']==p['base_commit'] and r['head_branch']=='main'
+-          assert r['head_repository']['full_name']==os.environ['GH_REPO']
+-          a=api(f'actions/artifacts/{p["base_artifact_id"]}')
+-          assert not a['expired'] and a['name']==p['base_artifact_name']
+-          assert a['workflow_run']['id']==p['base_run_id'] and a['workflow_run']['head_sha']==p['base_commit']
+-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+-              f.write(f'run_id={p["base_run_id"]}\nartifact_id={p["base_artifact_id"]}\n')
+-          PY
+-      - uses: actions/download-artifact@v7
+-        with:
+-          artifact-ids: ${{ steps.base.outputs.artifact_id }}
+-          run-id: ${{ steps.base.outputs.run_id }}
+-          github-token: ${{ github.token }}
+-          path: base-artifact
+-          merge-multiple: true
+-      - name: Prepare pinned inspection tools
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 -m pip install --user capstone==5.0.9 pyelftools==0.33
+-          python3 - <<'PY'
+-          import base64, hashlib, json, pathlib, urllib.request
+-          p=json.load(open('release/avatar-update.json'))
+-          url=f'https://android.googlesource.com/platform/external/avb/+/{p["avbtool_revision"]}/avbtool.py?format=TEXT'
+-          data=base64.b64decode(urllib.request.urlopen(url,timeout=60).read())
+-          assert hashlib.sha256(data).hexdigest()==p['avbtool_sha256']
+-          pathlib.Path('avbtool.py').write_bytes(data)
+-          PY
+-      - name: Package and verify About assets
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 scripts/package_about_update.py base-artifact/OrangeFox-unofficial-coral.img artifacts/OrangeFox-unofficial-coral.img --avatar theme/maintainer.png --avb-tool avbtool.py
+-          python3 scripts/validate_image.py artifacts/OrangeFox-unofficial-coral.img --keymaster-version 4.x --os-version 17 --os-patch-level 2026-09-01 --avb-tool avbtool.py --boot-security-patch 2022-10-05 --maintainer Hecker --maintainer-label '%of_maintainer% (Maintainer)' --maintainer-avatar theme/maintainer.png --channel-url https://t.me/pixel4seriesupdates
+-          python3 - <<'PY'
+-          import hashlib, json, os, pathlib, shutil
+-          p=json.load(open('release/avatar-update.json'))
+-          d=pathlib.Path('artifacts')
+-          assert pathlib.Path('base-artifact/device-tree-commit.txt').read_text().strip()==p['base_commit']
+-          for name in ['source-manifest.xml','kernel-metadata.json']:
+-              shutil.copyfile('base-artifact/'+name,d/name)
+-          (d/'device-tree-commit.txt').write_text(os.environ['GITHUB_SHA']+'\n')
+-          digest=hashlib.sha256((d/'OrangeFox-unofficial-coral.img').read_bytes()).hexdigest()
+-          (d/'SHA256SUMS').write_text(digest+'  OrangeFox-unofficial-coral.img\n')
+-          PY
+-      - uses: actions/upload-artifact@v6
+-        id: image
+-        with:
+-          name: OrangeFox-coral-about-${{ github.run_id }}-${{ github.run_attempt }}
+-          path: artifacts/
+-          if-no-files-found: error
+-          retention-days: 14
+-      - name: Publish verified regular release
+-        env:
+-          IMAGE_ARTIFACT_ID: ${{ steps.image.outputs.artifact-id }}
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import hashlib, json, os, pathlib, re, subprocess
+-          config=json.load(open('release/avatar-update.json'))
+-          d=pathlib.Path('artifacts')
+-          names=['OrangeFox-unofficial-coral.img','SHA256SUMS','device-tree-commit.txt','kernel-metadata.json','source-manifest.xml','theme-update.json']
+-          assert set(x.name for x in d.iterdir())==set(names)
+-          assert re.fullmatch(r'[A-Za-z0-9._-]+',config['tag'])
+-          image_sha=hashlib.sha256((d/names[0]).read_bytes()).hexdigest()
+-          assert (d/names[0]).stat().st_size==67108864
+-          assert (d/'SHA256SUMS').read_text().strip()==image_sha+'  '+names[0]
+-          theme=json.loads((d/'theme-update.json').read_text())
+-          assert theme['packaging_commit']==os.environ['GITHUB_SHA'] and theme['image_sha256']==image_sha
+-          assert theme['channel_url']==config['channel_url']
+-          notes=pathlib.Path(config['notes_file']).read_text()
+-          notes+='\nTheme source commit: `'+os.environ['GITHUB_SHA']+'`\nImage SHA256: `'+image_sha+'`\n'
+-          pathlib.Path('release/avatar-resolved-notes.md').write_text(notes)
+-          endpoint=f'repos/{os.environ["GH_REPO"]}/releases/tags/{config["tag"]}'
+-          result=subprocess.run(['gh','api',endpoint],capture_output=True,text=True)
+-          published=False
+-          if result.returncode==0:
+-              release=json.loads(result.stdout)
+-              if not release['draft']:
+-                  assets={a['name']:a for a in release['assets']}
+-                  assert set(assets)==set(names)
+-                  for name in names:
+-                      assert assets[name]['state']=='uploaded' and assets[name]['size']==(d/name).stat().st_size
+-                      assert assets[name]['digest']=='sha256:'+hashlib.sha256((d/name).read_bytes()).hexdigest()
+-                  published=True
+-          else:
+-              subprocess.run(['gh','release','create',config['tag'],'--target',os.environ['GITHUB_SHA'],'--title',config['release_title'],'--notes-file','release/avatar-resolved-notes.md','--draft'],check=True)
+-          if not published:
+-              subprocess.run(['gh','release','upload',config['tag'],*[str(d/name) for name in names],'--clobber'],check=True)
+-          subprocess.run(['gh','release','edit',config['tag'],'--draft=false','--prerelease=false','--latest'],check=True)
+-          p={'run_id':int(os.environ['GITHUB_RUN_ID']), 'artifact_id':int(os.environ['IMAGE_ARTIFACT_ID']),
+-             'artifact_name':f'OrangeFox-coral-about-{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}',
+-             'commit':os.environ['GITHUB_SHA'], 'image_sha256':image_sha, 'tag':config['tag'],
+-             'prerelease':False, 'theme_update':True, 'publication_revision':1}
+-          pathlib.Path('release/latest.json').write_text(json.dumps(p)+'\n')
+-          PY
+-      - name: Record published image provenance
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          git config user.name github-actions[bot]
+-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+-          git add release/latest.json
+-          if ! git diff --cached --quiet; then
+-            git commit -m 'Record verified About update release [skip ci]'
+-            git push origin HEAD:main
+-          fi
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index 4a34dcc..7600a94 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -1,53 +1,50 @@
+-name: Experimental coral OrangeFox
++name: OrangeFox Flame
+ on:
+   push:
+-    branches: [main]
+-    paths-ignore: [release/**, .github/workflows/release.yml, README.md, TESTING.md]
++    branches: [main, orangefox-flame]
++    paths-ignore: [README.md, TESTING.md, 'docs/**']
+   workflow_dispatch:
+ permissions:
+   contents: read
+ concurrency:
+-  group: coral-build-${{ github.ref }}
++  group: flame-build-${{ github.ref }}
+   cancel-in-progress: true
+ jobs:
+-  import-tree:
++  prepare:
++    name: Prepare Flame source and preserve Coral history
+     runs-on: ubuntu-22.04
+     permissions:
+       contents: write
++    outputs:
++      source_sha: ${{ steps.source.outputs.sha }}
+     steps:
+       - uses: actions/checkout@v5
+-      - name: Import pinned upstream device tree once
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          if [[ ! -f coral/BoardConfig.mk ]]; then
+-            git remote add teamwin https://github.com/TeamWin/android_device_google_coral.git
+-            git fetch --depth=1 teamwin b3f760ee3d17805e895c0d6e0387fd59d1f39120
+-            git archive FETCH_HEAD | tar -x
+-            git config user.name github-actions[bot]
+-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+-            git add .
+-            git commit -m 'Import pinned TeamWin coral device tree with original notices'
+-            git push origin HEAD:main
+-          fi
++        with:
++          fetch-depth: 0
++      - name: Import the pinned common tree on first run
++        id: source
++        run: bash scripts/materialize_tree.sh
++      - name: Validate Flame source selection
++        run: python3 scripts/validate_source.py
+   kernel:
+-    name: Build and checkpoint kernel
+-    needs: import-tree
++    name: Build and checkpoint Flame kernel
++    needs: prepare
+     runs-on: ubuntu-22.04
+     timeout-minutes: 90
+     steps:
+       - uses: actions/checkout@v5
++        with:
++          ref: ${{ needs.prepare.outputs.source_sha }}
+       - name: Prepare build host
+         run: bash scripts/prepare_host.sh
+-      - name: Build pinned kernel and DTBs
+-        shell: bash
++      - name: Build pinned Floral kernel and DTBs
+         env:
+           JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+         run: bash scripts/build.sh "$RUNNER_TEMP/orangefox" kernel
+       - name: Preserve completed kernel checkpoint
+         uses: actions/upload-artifact@v6
+         with:
+-          name: coral-kernel-${{ github.run_id }}
++          name: flame-kernel-${{ github.run_id }}
+           path: kernel-checkpoint/
+           if-no-files-found: error
+           retention-days: 14
+@@ -56,25 +53,26 @@ jobs:
+         if: always()
+         uses: actions/upload-artifact@v6
+         with:
+-          name: coral-kernel-logs-${{ github.run_id }}-${{ github.run_attempt }}
++          name: flame-kernel-logs-${{ github.run_id }}-${{ github.run_attempt }}
+           path: logs/
+           if-no-files-found: warn
+   recovery:
+-    name: Build recovery with checkpoint kernel
+-    needs: kernel
++    name: Build Flame recovery with checkpoint kernel
++    needs: [prepare, kernel]
+     runs-on: ubuntu-22.04
+     timeout-minutes: 90
+     steps:
+       - uses: actions/checkout@v5
++        with:
++          ref: ${{ needs.prepare.outputs.source_sha }}
+       - name: Download completed kernel checkpoint
+         uses: actions/download-artifact@v7
+         with:
+-          name: coral-kernel-${{ github.run_id }}
++          name: flame-kernel-${{ github.run_id }}
+           path: kernel-checkpoint/
+       - name: Prepare build host
+         run: bash scripts/prepare_host.sh
+       - name: Build and validate boot recovery
+-        shell: bash
+         env:
+           JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+         run: bash scripts/build.sh "$RUNNER_TEMP/orangefox" recovery
+@@ -82,12 +80,12 @@ jobs:
+         if: always()
+         uses: actions/upload-artifact@v6
+         with:
+-          name: coral-recovery-logs-${{ github.run_id }}-${{ github.run_attempt }}
++          name: flame-recovery-logs-${{ github.run_id }}-${{ github.run_attempt }}
+           path: logs/
+           if-no-files-found: warn
+-      - name: Upload structurally validated experimental image
++      - name: Upload structurally validated Flame image
+         uses: actions/upload-artifact@v6
+         with:
+-          name: OrangeFox-unofficial-coral-${{ github.run_id }}-${{ github.run_attempt }}
++          name: OrangeFox-unofficial-flame-${{ github.run_id }}-${{ github.run_attempt }}
+           path: artifacts/
+           if-no-files-found: error
+diff --git a/.github/workflows/maintainer-release.yml b/.github/workflows/maintainer-release.yml
+deleted file mode 100644
+index 93c6a79..0000000
+--- a/.github/workflows/maintainer-release.yml
++++ /dev/null
+@@ -1,117 +0,0 @@
+-name: Publish verified maintainer update
+-on:
+-  workflow_run:
+-    workflows: [Experimental coral OrangeFox]
+-    types: [completed]
+-    branches: [main]
+-  push:
+-    branches: [main]
+-    paths: [release/maintainer-update.json]
+-  workflow_dispatch:
+-permissions:
+-  contents: write
+-  actions: read
+-concurrency:
+-  group: coral-release
+-  cancel-in-progress: false
+-jobs:
+-  publish:
+-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.id == 38088385193 && github.event.workflow_run.conclusion == 'success')
+-    runs-on: ubuntu-22.04
+-    timeout-minutes: 15
+-    env:
+-      GH_TOKEN: ${{ github.token }}
+-      GH_REPO: ${{ github.repository }}
+-    steps:
+-      - uses: actions/checkout@v5
+-      - name: Resolve the successful maintainer build
+-        id: build
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import json, os, subprocess
+-          p=json.load(open('release/maintainer-update.json'))
+-          def api(path):
+-              return json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/{path}']))
+-          r=api(f'actions/runs/{p["run_id"]}')
+-          assert r['status']=='completed' and r['conclusion']=='success'
+-          assert r['head_sha']==p['commit'] and r['head_branch']=='main'
+-          assert r['repository']['full_name']==os.environ['GH_REPO']
+-          assert r['head_repository']['full_name']==os.environ['GH_REPO']
+-          artifacts=api(f'actions/runs/{p["run_id"]}/artifacts')['artifacts']
+-          matches=[a for a in artifacts if a['name']==p['artifact_name'] and not a['expired']]
+-          assert len(matches)==1, 'Expected one completed recovery image artifact'
+-          a=matches[0]
+-          assert a['workflow_run']['head_sha']==p['commit'] and a['workflow_run']['id']==p['run_id']
+-          p['artifact_id']=a['id']
+-          with open('release/resolved-maintainer.json','w') as f: json.dump(p,f)
+-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+-              f.write(f'artifact_id={a["id"]}\nrun_id={p["run_id"]}\n')
+-          PY
+-      - uses: actions/download-artifact@v7
+-        with:
+-          artifact-ids: ${{ steps.build.outputs.artifact_id }}
+-          run-id: ${{ steps.build.outputs.run_id }}
+-          github-token: ${{ github.token }}
+-          path: release-artifact
+-          merge-multiple: true
+-      - name: Install binary inspection dependencies
+-        run: python3 -m pip install --user capstone==5.0.9 pyelftools==0.33
+-      - name: Check runtime configuration and compiled About details
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 scripts/validate_image.py release-artifact/OrangeFox-unofficial-coral.img --keymaster-version 4.x --os-version 17 --os-patch-level 2026-09-01 --maintainer Hecker --support-url https://t.me/pixel4seriesofficial
+-      - name: Publish regular release with verified checksums
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import hashlib, json, os, pathlib, re, subprocess
+-          p=json.load(open('release/resolved-maintainer.json'))
+-          d=pathlib.Path('release-artifact')
+-          names=['OrangeFox-unofficial-coral.img','SHA256SUMS','device-tree-commit.txt','kernel-metadata.json','source-manifest.xml']
+-          assert set(x.name for x in d.iterdir())==set(names)
+-          assert re.fullmatch(r'[A-Za-z0-9._-]+',p['tag'])
+-          assert (d/names[0]).stat().st_size==67108864
+-          p['image_sha256']=hashlib.sha256((d/names[0]).read_bytes()).hexdigest()
+-          assert (d/'SHA256SUMS').read_text().strip()==p['image_sha256']+'  '+names[0]
+-          assert (d/'device-tree-commit.txt').read_text().strip()==p['commit']
+-          subprocess.run(['sha256sum','-c','SHA256SUMS'],cwd=d,check=True)
+-          notes=pathlib.Path('release/notes-2026-10-11.md').read_text()
+-          pathlib.Path('release/resolved-notes.md').write_text(notes+'\nImage SHA256: `'+p['image_sha256']+'`\n')
+-          endpoint=f'repos/{os.environ["GH_REPO"]}/releases/tags/{p["tag"]}'
+-          existing=subprocess.run(['gh','api',endpoint],capture_output=True,text=True)
+-          published=False
+-          if existing.returncode==0:
+-              release=json.loads(existing.stdout)
+-              if not release['draft']:
+-                  assets={a['name']:a for a in release['assets']}
+-                  assert set(assets)==set(names)
+-                  for n in names:
+-                      assert assets[n]['state']=='uploaded'
+-                      assert assets[n]['digest']=='sha256:'+hashlib.sha256((d/n).read_bytes()).hexdigest()
+-                  published=True
+-          else:
+-              subprocess.run(['gh','release','create',p['tag'],'--target',os.environ['GITHUB_SHA'],'--title','OrangeFox R12.0 Unofficial — Coral — Hecker maintainer update','--notes-file','release/resolved-notes.md','--draft'],check=True)
+-          if not published:
+-              subprocess.run(['gh','release','upload',p['tag'],*[str(d/n) for n in names],'--clobber'],check=True)
+-          subprocess.run(['gh','release','edit',p['tag'],'--draft=false','--prerelease=false','--latest'],check=True)
+-          p['prerelease']=False
+-          p['publication_revision']=1
+-          p.pop('maintainer',None)
+-          p.pop('support_url',None)
+-          pathlib.Path('release/latest.json').write_text(json.dumps(p)+'\n')
+-          PY
+-      - name: Record published artifact for future release runs
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          git config user.name github-actions[bot]
+-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+-          git add release/latest.json
+-          if ! git diff --cached --quiet; then
+-            git commit -m 'Record verified Hecker maintainer release [skip ci]'
+-            git push origin HEAD:main
+-          fi
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+deleted file mode 100644
+index 01ee845..0000000
+--- a/.github/workflows/release.yml
++++ /dev/null
+@@ -1,93 +0,0 @@
+-name: Publish tested Coral release
+-on:
+-  push:
+-    branches: [main]
+-    paths: [release/latest.json]
+-  workflow_dispatch:
+-permissions:
+-  contents: write
+-  actions: read
+-concurrency:
+-  group: coral-release
+-  cancel-in-progress: false
+-jobs:
+-  publish:
+-    runs-on: ubuntu-22.04
+-    timeout-minutes: 15
+-    env:
+-      GH_TOKEN: ${{ github.token }}
+-      GH_REPO: ${{ github.repository }}
+-    steps:
+-      - uses: actions/checkout@v5
+-      - name: Verify successful pinned build
+-        id: pin
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import json, os, re, subprocess
+-          p=json.load(open('release/latest.json'))
+-          assert isinstance(p['run_id'],int) and p['run_id']>0
+-          assert isinstance(p['artifact_id'],int) and p['artifact_id']>0
+-          assert re.fullmatch(r'[0-9a-f]{40}',p['commit'])
+-          assert re.fullmatch(r'[0-9a-f]{64}',p['image_sha256'])
+-          assert re.fullmatch(r'[A-Za-z0-9._-]+',p['tag'])
+-          assert isinstance(p.get('prerelease',True),bool)
+-          def api(path):
+-              return json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/{path}']))
+-          r=api(f'actions/runs/{p["run_id"]}')
+-          assert r['status']=='completed' and r['conclusion']=='success'
+-          assert r['head_sha']==p['commit']
+-          a=api(f'actions/artifacts/{p["artifact_id"]}')
+-          assert not a['expired'] and a['name']==p['artifact_name']
+-          assert a['workflow_run']['id']==p['run_id'] and a['workflow_run']['head_sha']==p['commit']
+-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+-              for k in ('run_id','artifact_id'): f.write(f'{k}={p[k]}\n')
+-          PY
+-      - uses: actions/download-artifact@v7
+-        with:
+-          artifact-ids: ${{ steps.pin.outputs.artifact_id }}
+-          run-id: ${{ steps.pin.outputs.run_id }}
+-          github-token: ${{ github.token }}
+-          path: release-artifact
+-          merge-multiple: true
+-      - name: Verify and publish tested assets
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-          python3 - <<'PY'
+-          import hashlib, json, os, pathlib, subprocess
+-          p=json.load(open('release/latest.json'))
+-          d=pathlib.Path('release-artifact')
+-          names=['OrangeFox-unofficial-coral.img','SHA256SUMS','device-tree-commit.txt','kernel-metadata.json','source-manifest.xml']
+-          if p.get('theme_update'): names.append('theme-update.json')
+-          assert set(x.name for x in d.iterdir())==set(names)
+-          image=d/names[0]
+-          assert image.stat().st_size==67108864
+-          assert hashlib.sha256(image.read_bytes()).hexdigest()==p['image_sha256']
+-          assert (d/'device-tree-commit.txt').read_text().strip()==p['commit']
+-          assert (d/'SHA256SUMS').read_text().strip()==p['image_sha256']+'  '+names[0]
+-          subprocess.run(['sha256sum','-c','SHA256SUMS'],cwd=d,check=True)
+-          endpoint=f'repos/{os.environ["GH_REPO"]}/releases/tags/{p["tag"]}'
+-          existing=subprocess.run(['gh','api',endpoint],capture_output=True,text=True)
+-          flags=['--prerelease='+str(p.get('prerelease',True)).lower()]
+-          if not p.get('prerelease',True): flags.append('--latest')
+-          if existing.returncode==0:
+-              release=json.loads(existing.stdout)
+-              if not release['draft']:
+-                  # A published release can only change its release status here.
+-                  # Require every uploaded asset to match the pinned artifact first.
+-                  assets={a['name']:a for a in release['assets']}
+-                  assert set(assets)==set(names)
+-                  for n in names:
+-                      a=assets[n]
+-                      assert a['state']=='uploaded' and a['size']==(d/n).stat().st_size
+-                      assert a['digest']=='sha256:'+hashlib.sha256((d/n).read_bytes()).hexdigest()
+-                  subprocess.run(['gh','release','edit',p['tag'],*flags],check=True)
+-                  raise SystemExit(0)
+-              assert release['target_commitish']==os.environ['GITHUB_SHA']
+-          else:
+-              subprocess.run(['gh','release','create',p['tag'],'--target',os.environ['GITHUB_SHA'],'--title','OrangeFox R12.0 Unofficial — Pixel 4 XL (coral) — 2026-10-10','--notes-file','release/notes-2026-10-10.md','--draft',*flags],check=True)
+-          subprocess.run(['gh','release','upload',p['tag'],*[str(d/n) for n in names],'--clobber'],check=True)
+-          subprocess.run(['gh','release','edit',p['tag'],'--draft=false',*flags],check=True)
+-          PY
+diff --git a/AndroidProducts.mk b/AndroidProducts.mk
+index 8b0a79e..792cd1e 100644
+--- a/AndroidProducts.mk
++++ b/AndroidProducts.mk
+@@ -29,5 +29,6 @@ PRODUCT_MAKEFILES := \
+     $(LOCAL_DIR)/aosp_flame_hwasan.mk \
+ 
+ COMMON_LUNCH_CHOICES := \
++    twrp_flame-eng \
+     aosp_coral-userdebug \
+     aosp_flame-userdebug \
+diff --git a/README.md b/README.md
+index 68dce27..59ba252 100644
+--- a/README.md
++++ b/README.md
+@@ -1,80 +1,95 @@
+-# OrangeFox for Google Pixel 4 XL (coral)
++# OrangeFox for Google Pixel 4 (flame)
+ 
+ Maintainer: **Hecker** ([its-hecker](https://github.com/its-hecker)).
+-Support: [Pixel 4 Series](https://t.me/pixel4seriesofficial).
+-Channel: [Pixel 4 Series Updates](https://t.me/pixel4seriesupdates).
+-
+-[Download the tested release](https://github.com/its-hecker/orangefox_device_google_coral/releases/tag/R12.0-coral-unofficial-20261010).
+-
+-Experimental port for Infinity Android 17 on Pixel 4 XL (coral). The latest
+-tester report and logs confirm PIN/data decryption and automatic battery
+-startup after the fixes. Touch, ADB and MTP were reported working during
+-bring-up. Settings, brightness changes and a theme reload completed without a
+-recorded recovery crash or restart. The tester subsequently reported a successful ROM ZIP
+-installation and boot to Android, plus a small recovery-transferred file
+-surviving reboot. Console stability and longer runs still need validation. These results apply to the tested
+-Coral/Infinity installation.
+-
+-Based on TeamWin/android_device_google_coral, android-12.1 commit b3f760ee3d17805e895c0d6e0387fd59d1f39120. Original copyright and licensing notices are preserved.
+-
+-CI builds the pinned kernel and DTB bundle first and saves a checkpoint artifact.
+-A fresh recovery job verifies its checksums and source revisions, then packages
+-that kernel without compiling it again. If recovery fails, rerun the failed job
+-to reuse the completed kernel checkpoint. Both jobs stream resource diagnostics
+-to the Actions log and save detailed logs when the runner remains available.
+-
+-For a local source build, run `bash scripts/build.sh /absolute/build/directory`.
+-The optional `kernel` and `recovery` stages use `kernel-checkpoint/` by default.
+-The image artifact includes checksums, the source manifest and kernel provenance;
+-the validator checks header v2, the 64 MiB partition limit, and exact checkpoint
+-kernel and DTB contents, plus the boot header's OS/system-patch values and
+-the separate boot AVB firmware patch. Device testing is described in [TESTING.md](TESTING.md).
+-
+-The first Infinity device test reached the OrangeFox splash but blocked waiting
+-for Qualcomm Keymaster 4.0/default. Coral also has Citadel 4.1/strongbox;
+-the fallback now uses `4.x` to start both services. The ramdisk includes the
+-QTI Gatekeeper implementation that was missing in that test. CI checks these
+-startup triggers and packaged libraries before uploading the image.
+-
+-The next test was subsequently reported as a Flame cross-device boot. The
+-associated logs record crashes after opening Screen settings and the console,
+-but identify the hardware as `coral` with a 1440x3040 framebuffer. Matching
+-device identity and logs still need confirmation. The
+-[slider source patch](patches/README.md) fixes an independently reproduced
+-image-buffer overread at the logged theme scales. CI exercises the patched
+-renderer against guarded buffers; its relationship to the device crashes
+-is supported by a later Coral settings test with no recorded crash, although
+-the console still needs testing. Those earlier logs also show `/data` metadata decryption
+-failing with Keymaster error `-38`; the later Coral test described below reports
+-working decryption after the version-metadata fix.
+-
+-The earlier Coral photograph shows an empty battery reading. The packaged
+-Health 2.1 service was disabled and only started by the fastbootd trigger;
+-normal recovery now starts it on boot. CI checks the startup trigger, service,
+-implementation and manifest. The tester confirmed that manually starting the
+-service restored a 51% reading and charging indicator, and the fresh logs show
+-Health registration succeeding. The latest logs confirm the service starts on
+-normal boot and reports 34%; the tester confirms the percentage appears
+-automatically. The device checks are in [TESTING.md](TESTING.md).
+-
+-The supplied ROM properties identify Android 17, system patch 2026-09-01 and
+-vendor patch 2022-10-05. The previous recovery supplied Android 12 and the
+-placeholder date 2127-12-31 while `prepdecrypt` skipped ROM version updates
+-during temporary fastboot boot. The updated build enables those updates on init,
+-before QSEE/Keymaster startup, and supports both system build.prop layouts.
+-Its legacy boot header targets Android 17 / September 2026; boot and vendor
+-firmware metadata stay at 2022-10-05, matching
+-[Infinity's Coral tree](https://github.com/its-hecker/infinity_cnb_android_device_google_coral/blob/b8eb4b5868bd5e3412bb0287361bf2fa63ad8bab/device-common.mk).
+-These values align Keymaster metadata with this ROM, not the security fixes
+-in recovery's Android 12.1 binaries. CI verifies the startup script with host
+-property/mount substitutes.
+-
+-[Build 38071785744](https://github.com/its-hecker/orangefox_device_google_coral/actions/runs/38071785744)
+-completed successfully for the version-metadata fix at `5e77df7`. On October 10,
+-the tester subsequently reported that OrangeFox asks for decryption and data
+-decryption works on the Pixel 4 XL. The subsequent `recovery(3).log` confirms
+-metadata decryption to `/dev/block/dm-4`, PIN/synthetic-password unlocking of
+-user 0, and internal storage at `/data/media/0`. `logcat(3).txt` confirms normal
+-boot starts Health 2.1/default. The three latest logs contain no fatal signal,
+-recovery exit/restart or kernel fault during the recorded settings test.
+-ROM ZIP installation is still untested.
++Updates: [Pixel 4 Series Updates](https://t.me/pixel4seriesupdates).
++Support: [Pixel 4 ROMs](https://t.me/Pixel4Roms).
++
++[Builds and logs](https://github.com/its-hecker/orangefox_device_google_flame/actions/workflows/build.yml)
++
++OrangeFox R12.0 / Android 12.1 recovery source for **Pixel 4 (flame)**, carrying
++forward the functional fixes from our Coral recovery. The initial configuration
++targets Infinity Android 17. **Flame device testing is pending.** A successful
++build proves compilation and packaging, not working hardware or decryption.
++
++## Shared TWRP source
++
++[TeamWin's official Flame page](https://twrp.me/google/googlepixel4.html) links to
++[TeamWin/android_device_google_coral](https://github.com/TeamWin/android_device_google_coral),
++the same common Floral tree used for Pixel 4 XL. It contains `twrp_flame.mk`,
++`device-flame.mk` and `flame/BoardConfig.mk` alongside the Coral files.
++
++Use this repository's **orangefox-flame** branch. The original stable Coral
++repository is not modified. The Coral history is preserved through commit
++`f67f624c0b94213f4447f8ab6039c80de9b82a21`; see
++[port/provenance.json](port/provenance.json) for source pins and fixes.
++
++The checkout path deliberately stays **device/google/coral**, because that is
++the upstream common-tree path. The build product is **twrp_flame-eng**, the
++bootloader board is **flame**, and output is **out/target/product/flame**.
++The Flame board keeps its own 440-DPI setting and device overlays.
++
++## Carried-over fixes
++
++- Qualcomm Keymaster 4.0/default and Citadel 4.1/strongbox startup, with the
++  missing QTI Gatekeeper implementation and recovery library checks.
++- Installed-ROM version properties before crypto startup, including temporary
++  fastboot boot, and support for both system build.prop layouts.
++- Normal-boot Health 2.1 startup for battery percentage and charging state.
++- Slider handle rendering fix for Screen settings and console, plus host
++  regression coverage for the original image-buffer overread.
++- A/B recovery-as-boot configuration, dynamic-partition support, MTP/ADB,
++  recovery repacking tools and compatible ROM ZIP installation support.
++- Hecker maintainer label, selected cat avatar and corrected Telegram channel.
++- Bounded build parallelism, swap, logs and verified kernel/DTB checkpoints.
++
++Coral testing reported working PIN/data decryption, battery percentage and ROM
++ZIP installation on Infinity Android 17. These are **Coral results**, and are
++not recorded as successful Flame tests. The first Flame image must be tested
++using [TESTING.md](TESTING.md).
++
++## Build
++
++Use **Actions → OrangeFox Flame → Run workflow**, selecting `orangefox-flame`.
++CI builds the pinned TeamWin Floral kernel first and saves a checkpoint; a
++fresh runner verifies and packages that exact kernel and DTB bundle. If only
++the recovery job fails, rerun the failed job to reuse the completed checkpoint.
++
++For a local Linux build, install the dependencies listed in
++`scripts/prepare_host.sh` and ensure `repo`, Java 11 and the listed Python
++packages are available. From this checkout run:
++
++```sh
++bash scripts/build.sh /absolute/path/to/empty-build-directory
++```
++
++The script stages this common tree at `device/google/coral`, syncs its
++additional dependencies and builds `twrp_flame-eng`. Use a fresh build directory.
++The optional `kernel` and `recovery` stages share `kernel-checkpoint/`.
++
++Output includes `OrangeFox-unofficial-flame.img`, `SHA256SUMS`, the Android
++source manifest, the device-tree commit and kernel/port provenance. Image checks
++require header v2, a maximum 64 MiB image, matching kernel/DTBs, Flame init,
++crypto/Health startup and the actual packaged maintainer, avatar and channel.
++
++## Initial test
++
++On a Pixel 4 with an unlocked bootloader, verify `fastboot getvar product`
++reports **flame**, check `SHA256SUMS`, then temporarily boot:
++
++```sh
++fastboot boot OrangeFox-unofficial-flame.img
++```
++
++Follow [TESTING.md](TESTING.md) for PIN/data, screen, battery, USB and ROM ZIP
++tests. After those checks pass, the recovery's **Flash current OrangeFox
++recovery** option is the installation route carried over from Coral. Permanent
++installation/repacking on Flame still needs verification with the installed
++ROM kernel; the initial build does not distribute an installer ZIP.
++
++The initial boot-header metadata is Android 17 / September 2026, with boot and
++vendor firmware patch metadata at 2022-10-05, matching the Coral Infinity
++configuration. `prepdecrypt` reads the installed ROM properties at runtime.
++This does not update the Android 12.1 recovery binaries' security fixes or
++establish compatibility with every ROM/encryption configuration.
++
++Original TeamWin, OrangeFox and AOSP copyright and license notices are retained.
+diff --git a/TESTING.md b/TESTING.md
+index 72d9515..cd5ecc3 100644
+--- a/TESTING.md
++++ b/TESTING.md
+@@ -1,174 +1,100 @@
+-# Pixel 4 XL bring-up
+-
+-This is an experimental recovery. The latest tester report and logs confirm
+-PIN/data decryption and automatic battery startup on a Pixel 4 XL with
+-Infinity Android 17. Settings and brightness changes completed without a
+-recorded recovery crash. The tester subsequently reported a successful ROM ZIP installation and boot
+-to Android, plus a small recovery-transferred file surviving reboot (after
+-`adb shell sync`). Console stability and longer runs still require validation. The 12.1 build platform alone does not establish support
+-for other ROM encryption configurations. No automatic data format, encryption
+-disable, AVB disable or permanent recovery installation is provided.
+-
+-The October 9 test of device-tree commit `a56060a` was subsequently reported
+-as a Pixel 4 (flame) boot of the Coral image, with Files, touch, ADB and MTP
+-working. It does not confirm those features on Coral. The supplied logs identify
+-`androidboot.hardware=coral` and a 1440x3040 framebuffer, so their association
+-with the reported Flame test needs confirmation. They record three
+-recovery-process SIGSEGVs: one after opening Screen settings and two after
+-opening the console. Metadata decryption also failed; the Files page opening
+-does not establish access to encrypted data. Retest on Coral with the slider
+-fix, including Screen settings, the console, slider dragging and returning to
+-Files, then collect the same three logs if a restart occurs.
+-
+-On October 10 the tester confirmed the latest test is on a Pixel 4 XL and
+-provided a photograph of the Files UI. The status bar has a battery icon and
+-percent sign but no value. The Health service is included but was only started
+-when entering fastbootd. The next build starts `health-hal-2-1` on normal boot.
+-The tester also reports that storage remains encrypted and OrangeFox does not
+-ask for a password despite the installed OS having a screen lock. The supplied
+-logs fail at metadata-key use before credential-protected file unlocking;
+-the missing prompt is consistent with that failure. Decryption remains failed
+-in this test and is separate from the Health service startup fix.
+-
+-The same tester subsequently ran `adb shell start health-hal-2-1`, restoring a
+-51% reading and charging indicator. Fresh logs show successful Health 2.1
+-registration. They contain one recovery-process startup and no fatal recovery
+-signal, including a visit to Screen settings; the console was not opened in
+-this capture. This validates manual Health startup, not the new automatic
+-startup trigger or complete UI stability.
+-
+-Those pre-fix logs fail metadata-key use with `KEY_REQUIRES_UPGRADE (-62)`
+-followed by `INVALID_ARGUMENT (-38)` during upgrade. The ROM is detected as
+-Android 17, while recovery reports Android 12 and the placeholder patch date
+-2127-12-31. The tested image's boot header also contains Android 12 and a
+-December 2127 patch level. `prepdecrypt` reports `SETPATCH=false`. The installed
+-properties supplied afterwards confirm Android 17, system patch 2026-09-01
+-and vendor patch 2022-10-05. Infinity's Coral source also sets the boot firmware
+-patch to 2022-10-05. The version-metadata fix enables ROM property updates on
+-init even for temporary boot, before QSEE/Keymaster start, and accepts both system image
+-property layouts. It replaces the future patch dates and encodes Android 17 /
+-September 2026 in the legacy boot header, with the separate AVB boot firmware
+-patch at 2022-10-05. No encryption key blobs are edited by this configuration
+-change.
+-
+-CI build `38071785744` completed successfully for fix commit `5e77df7`. Later
+-on October 10, the tester reported that the decryption prompt appears and data
+-decryption works on the Pixel 4 XL, superseding the earlier failed-decryption
+-report for this installation.
+-
+-The tester then confirmed that the battery percentage appears automatically
+-and settings seem stable, and supplied `recovery(3).log`, `logcat(3).txt` and
+-`dmesg(3).txt`. They provide the following evidence:
+-
+-- The logs record `prepdecrypt::SETPATCH=true`, Android release `17`, system
+-  patch `2026-09-01` and vendor patch `2022-10-05`.
+-- Metadata decryption succeeds with `/dev/block/dm-4`. The PIN page opens,
+-  Weaver/synthetic-password unlocking succeeds, and the log records
+-  `User 0 Decrypted Successfully` and `Data successfully decrypted`.
+-  Internal storage switches to `/data/media/0`, and `/data` is mounted as f2fs.
+-- The normal `on boot` action starts `health-hal-2-1`; Health 2.1/default
+-  registers and reports 34% with subsequent charging-state updates.
+-- One OrangeFox process startup is recorded. Settings, theme customization,
+-  a theme reload and Screen brightness changes complete without a fatal
+-  signal or recovery exit/restart in these logs. No kernel fault is recorded.
+-
+-This capture covers about three minutes. Loading console page definitions is
+-not a console visit; the console was not opened in this capture. Wipe/Restore
+-page visits do not establish wipe, restore or ROM installation success.
+-Console testing, longer stability runs and compatible ROM ZIP installation
+-remain separate checks.
+-
+-Only test on **coral** with an unlocked bootloader. Confirm the product with
+-`fastboot getvar product`. Preserve the exact Infinity boot image and a data
+-backup before testing. Coral uses recovery in boot, not a separate recovery
+-partition. Do not run `fastboot flash recovery`.
+-
+-After a successful build, verify the downloaded image against SHA256SUMS.
+-The first test is temporary boot: `fastboot boot OrangeFox-unofficial-coral.img`.
+-Do not flash the image to either boot slot during initial bring-up. Temporary
+-boot avoids replacing the ROM boot image, but recovery operations can still
+-modify data. Exit by rebooting without installing or formatting anything.
+-
+-Record boot/display/touch, USB ADB, MTP, battery reporting, read-only partition
+-mounting, reboot targets and fastbootd separately. Data decryption is reported
+-working on the tested Infinity installation; don't format data to work around
+-a future decryption failure. Sideload installation and A/B OTA behavior require
+-separate testing with the ROM's
+-supported packages after basic bring-up succeeds.
+-
+-Collect `adb pull /tmp/recovery.log`, `adb logcat -d > logcat.txt` and
+-`adb shell dmesg > dmesg.txt` when available. Include the source-manifest.xml,
+-device-tree commit, ROM build, the product reported by `fastboot getvar product`,
+-and exact test result when reporting failures.
+-
+-## Device checks in recovery
+-
+-1. Open Screen settings, move the brightness slider, return to Files, then open
+-   and close the console several times. Leave recovery idle for five minutes
+-   and note any restart or freeze.
+-2. If a decrypt prompt appears, enter the device's PIN/password on the phone.
+-   Browse `/sdcard/Download` or `/data/media/0/Download` and confirm existing,
+-   recognizable filenames. Read one small existing file through MTP or with
+-   `adb pull /sdcard/Download/NAME`. A `/data` directory, an empty folder or
+-   storage capacity alone does not prove decryption. Do not format data.
+-3. Check battery capacity and charging status, then connect/disconnect a
+-   charger and compare the status bar after a few seconds:
++# Pixel 4 (flame) validation
+ 
+-   ```sh
+-   adb shell cat /sys/class/power_supply/battery/capacity
+-   adb shell cat /sys/class/power_supply/battery/status
+-   adb shell getprop init.svc.health-hal-2-1
+-   ```
++Current status: Flame hardware tests are pending. Source, build and ramdisk
++checks do not establish device functionality. The Coral results remain in the
++preserved Git history and the source pins are in `port/provenance.json`.
+ 
+-   On the previous build, `adb shell start health-hal-2-1` starts the packaged
+-   service for this boot. If the percentage appears, that confirms the missing
+-   normal startup trigger. If it stays blank or the service restarts, collect
+-   logs rather than changing the theme or battery values.
+-4. Read the active mounts with `adb shell cat /proc/mounts`. Check that the
+-   `/data` mount is present when testing storage; successful sysfs battery
+-   reads do not depend on `/data` decryption.
+-   After booting the version-metadata fix, record:
++## First temporary boot
++
++1. Save the exact boot image for the installed Flame ROM and back up important
++   data. Confirm the unlocked device reports `flame` with `fastboot getvar product`.
++2. Download the image artifact from the Flame build and verify `SHA256SUMS`.
++3. Run `fastboot boot OrangeFox-unofficial-flame.img`. Pixel 4 uses recovery in
++   boot; it has no separate recovery partition.
++4. Record the build/run ID and ROM version. Confirm display and touch, including
++   the screen edges. Open Screen settings, adjust brightness, open/close the
++   console several times, reload the theme and leave recovery idle for five minutes.
++5. Check ADB and MTP. Confirm the phone identifies as Flame:
+ 
+    ```sh
+-   adb shell getprop prepdecrypt.setpatch
+-   adb shell getprop ro.build.version.release
+-   adb shell getprop ro.build.version.security_patch
+-   adb shell getprop ro.vendor.build.security_patch
++   adb shell getprop ro.product.device
++   adb shell getprop ro.product.model
++   adb shell getprop ro.boot.hardware
+    ```
+ 
+-   Expected values for the supplied Infinity build are `true`, `17`,
+-   `2026-09-01`, and `2022-10-05`. Recovery's build SDK remains 32; it is not
+-   changed to the ROM's SDK 37. These property checks alone do not prove data
+-   decryption; confirm the PIN prompt and existing files as described above.
+-5. After a restart, blank battery reading or storage failure, collect the
+-   three logs above and report the exact image/build tested. Once these checks
+-   pass, USB OTG and ROM installation can be tested separately with compatible
+-   packages.
+-
+-For diagnosing a metadata-decryption failure, use the ROM property copies saved
+-by the OrangeFox startup script. It mounts system/vendor read-only while reading
+-ROM information, caches the files under `/FFiles/temp`, and unmounts its
+-temporary mounts. The original paths may therefore be unavailable afterwards.
+-These copies do not require access to user files or key blobs:
++## Decryption and internal storage
++
++Use the phone's existing PIN/password on the recovery screen. Confirm existing
++recognizable filenames under `/sdcard/Download` or `/data/media/0/Download`.
++Read a small existing file over MTP or `adb pull`; capacity or an empty directory
++alone does not prove decryption. Do not format data as a decryption workaround.
++
++Check the version properties after startup:
++
++```sh
++adb shell getprop prepdecrypt.setpatch
++adb shell getprop ro.build.version.release
++adb shell getprop ro.build.version.security_patch
++adb shell getprop ro.vendor.build.security_patch
++```
++
++The first property should be `true`; the others should match the installed
++ROM. The carried-over Infinity defaults are Android 17, 2026-09-01 system patch
++and 2022-10-05 vendor patch. Recovery's compiled SDK remains 32.
++
++## Battery, USB and reboot targets
++
++Compare recovery's battery percentage and charging icon against:
++
++```sh
++adb shell cat /sys/class/power_supply/battery/capacity
++adb shell cat /sys/class/power_supply/battery/status
++adb shell getprop init.svc.health-hal-2-1
++```
++
++Health should be running without a manual `start`. Connect/disconnect a charger,
++then test ADB, MTP file copy, OTG, reboot to bootloader, reboot to Android and
++reboot to fastbootd separately. For a copied file run `adb shell sync` and check
++it remains accessible after reboot to Android.
++
++## Installation tests
++
++After basic boot, storage and USB checks pass, test a **Flame-compatible** ROM
++ZIP using the ROM's documented procedure. Record installation success, active
++slot and successful Android boot; test internal-storage install and ADB sideload
++separately. Confirm backup/restore on a non-critical test before relying on it.
++
++The persistent installation route inherited from Coral is to boot OrangeFox and
++select **Flash current OrangeFox recovery**. Test this only after temporary
++boot works, with the installed ROM's original boot image available. Repacking
++can interact with the ROM kernel and root; neither persistent installation nor
++A/B OTA persistence has been established on Flame by the source port.
++
++| Check | Flame result |
++|---|---|
++| Boot, panel, touch, brightness | Pending |
++| Settings, console, theme reload, idle stability | Pending |
++| PIN/metadata/file decryption | Pending |
++| Internal storage, MTP, ADB, OTG | Pending |
++| Battery and charging updates | Pending |
++| Reboot targets and fastbootd | Pending |
++| ROM ZIP install and Android boot | Pending |
++| ADB sideload | Pending |
++| Backup/restore | Pending |
++| Flash current recovery and reboot | Pending |
++
++## Failure logs
++
++Collect these from the same test session:
+ 
+ ```sh
++adb pull /tmp/recovery.log
++adb logcat -d > logcat.txt
++adb shell dmesg > dmesg.txt
+ adb pull /FFiles/temp/system_build_prop system-build.prop
+ adb pull /FFiles/temp/vendor_build_prop vendor-build.prop
+ ```
+ 
+-If a copy is absent, collect `adb shell ls -l /FFiles/temp` so its presence can
+-be checked before attempting another path.
+-
+-Build artifacts are uploaded only after header-v2, image-size, kernel, ramdisk,
+-DTB and truncation checks pass. The decryption packaging check also requires
+-startup of both Qualcomm Keymaster 4.0/default and Citadel 4.1/strongbox, and
+-the 64-bit QTI Gatekeeper implementation under `/system/lib64/hw`.
+-It also checks normal-boot startup of Health 2.1/default and its packaged
+-binary, implementation and VINTF declaration.
+-It requires `prepdecrypt.setpatch=true` on init, the property-updating script
+-and resetprop, and checks the boot header OS/system patch and AVB boot firmware
+-patch against the build settings. Host tests exercise the actual prepdecrypt
+-script with fake mounts/properties in both system layouts and the temporary
+-fastboot path, including a missing-property-file failure.
+-These checks cannot establish runtime safety, bootability, hardware-service
+-registration or Android 17 compatibility.
++Include the Flame image SHA256, Actions run, `device-tree-commit.txt`, the
++installed ROM and `fastboot getvar product`. Property copies may be absent if
++startup failed before reading the ROM; report that rather than changing keys.
+diff --git a/flame/BoardConfig.mk b/flame/BoardConfig.mk
+index 347e284..fb6ce5a 100644
+--- a/flame/BoardConfig.mk
++++ b/flame/BoardConfig.mk
+@@ -22,4 +22,9 @@ else
+   TARGET_RECOVERY_UI_MARGIN_HEIGHT := 165
+ 
+   include device/google/coral/BoardConfig-common.mk
++
++  # Reuse only the kernel checkpoint verified for this Flame source commit.
++  ifneq ($(wildcard device/google/coral/ci-kernel/verified),)
++    include device/google/coral/ci/prebuilt-kernel.mk
++  endif
+ endif
+diff --git a/patches/README.md b/patches/README.md
+index 3d4d87c..d21047d 100644
+--- a/patches/README.md
++++ b/patches/README.md
+@@ -1,5 +1,12 @@
+ # Recovery source patches
+ 
++This Flame branch retains all three Coral source patches unchanged. The host
++slider harness also covers Flame's 1080x2280 aspect mismatch (96x96 loaded
++handle versus 96x114 XML dimensions). `init.recovery.device.rc` is packaged
++under the Flame target's name; installed-ROM properties, crypto startup and
++Health startup are the same shared fixes. Coral device-test reports below
++remain historical reference evidence.
++
+ `0001-fit-slider-handles-to-scaled-images.patch` applies to
+ `gui/slidervalue.cpp` in OrangeFox Recovery `fox_12.1`, tested at
+ `cbcc4f713dbef98d76d6d2cfd019b1ebfd9418e9`.
+diff --git a/port/provenance.json b/port/provenance.json
+new file mode 100644
+index 0000000..6a82382
+--- /dev/null
++++ b/port/provenance.json
+@@ -0,0 +1,66 @@
++{
++  "device": "flame",
++  "device_name": "Google Pixel 4",
++  "repository": "its-hecker/orangefox_device_google_flame",
++  "branch": "orangefox-flame",
++  "checkout_path": "device/google/coral",
++  "lunch_target": "twrp_flame-eng",
++  "teamwin_repository": "TeamWin/android_device_google_coral",
++  "teamwin_branch": "android-12.1",
++  "teamwin_commit": "b3f760ee3d17805e895c0d6e0387fd59d1f39120",
++  "flame_official_source_page": "https://twrp.me/google/googlepixel4.html",
++  "coral_repository": "its-hecker/orangefox_device_google_coral",
++  "coral_commit": "f67f624c0b94213f4447f8ab6039c80de9b82a21",
++  "kernel_repository": "TeamWin/android_kernel_google_msm-4.14",
++  "kernel_commit": "9d2fb45d1fc6e11ac7e03e73c772b69ce158ea0a",
++  "coral_functional_commits": {
++    "dc77f9b4c1d2": "Explicit backlight path and 10-bit brightness range",
++    "c679b7bffcc3": "Separate verified kernel checkpoint and recovery build jobs",
++    "a56060a8127f": "Start Qualcomm and Citadel Keymaster; package Gatekeeper implementation",
++    "50bcba964204": "Fix slider image overreads and exercise actual renderer on host",
++    "4b42ad406ee3": "Start Health 2.1 during normal recovery boot",
++    "5e77df717d12": "Read installed ROM version properties before Keymaster, including temporary boot",
++    "9d8fa5ec09d6": "Hecker maintainer details",
++    "976aff151e4f": "Maintainer label and selected cat avatar",
++    "1152841ae04f": "Pixel 4 Series Updates channel in About"
++  },
++  "flame_hardware_status": "Untested; Coral results are reference evidence only",
++  "inherited_sha256": {
++    "init.recovery.device.rc": "b2950d76a1410a4bcad430693bcbfdd2b12000383e86952e38addc70e39ef6d0",
++    "BoardConfig-common.mk": "0e321251c7e2ef01233cdfba1ef0bca68e68b3b0a971e2b39af40634122c473b",
++    "fstab.hardware": "11ca8d35625ae8c3fa2cab0341994a9769633f935e6491a6fa653b2930aaadd6",
++    "prebuilts/vendor/etc/vintf/manifest.xml": "4e16dcb8ffa7c49b056013d0255dbd59446238157bce1ebc9b1ce47366415eeb",
++    "prebuilts/system/etc/twrp.flags": "dc15889dace722f5326a41366dd3c234aae6674172b5c95008a77e4defb1062e",
++    "theme/maintainer.png": "f4818aa7acc691df48fa82e75654a9e205129730b24f42f3922efe6c4bf2470b",
++    "patches/0001-fit-slider-handles-to-scaled-images.patch": "65b782ffbb30d9e5442cfc6ddcdde293a27c7782081993dcc5921d1666bdf4e9",
++    "patches/0002-read-system-properties-from-both-layouts.patch": "c8ce2ec97caa8e53945a181ea7e0dc4fdafaa5fd97786b9540f18d33621515a9",
++    "patches/0003-show-coral-maintainer-support.patch": "e9d7066f2eef9646c0f79133a597c580bce30bd39fdb135e77abbd900f48c1e0",
++    "prebuilts/system/lib64/android.hardware.authsecret@1.0-impl.nos.so": "661896820d326ac189ad2ce4106ed1b0b18a962f0f2dcd66bcc8b5b7fa2f866c",
++    "prebuilts/system/lib64/android.hardware.keymaster@4.1-impl.nos.so": "7821defd34f4d2bb68946d9f0215510c589769d95b81aa1cb76271065d35a717",
++    "prebuilts/system/lib64/android.hardware.oemlock@1.0-impl.nos.so": "3d6892ccfcf49467c881f71dce2b7f1816608f3da0e0d81dfca3c68ec71c86b9",
++    "prebuilts/system/lib64/android.hardware.weaver@1.0-impl.nos.so": "448225cd7cb30bf884964f1f0994782beb69b9ba208742f459c301f10c40b0f8",
++    "prebuilts/system/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so": "01c6c290337ad14d272c0e97611edf064b29a1b4e399132b95ca2e3a725f8028",
++    "prebuilts/system/lib64/libQSEEComAPI.so": "40027ae5f2633c2fcb92cdd83fff85b593b0e44370dc7c468b40c5380102a1cb",
++    "prebuilts/system/lib64/libdiag.so": "df66ca9e318d0d502e5e9d9f5298b67e91ae501975a4fd56f4925c2a6d49cb4e",
++    "prebuilts/system/lib64/libdrmfs.so": "b4b581cb4e1f1a2a202c9698c5a3dcf0e0e83a7b8048ff7709768d287425d1ad",
++    "prebuilts/system/lib64/libion.so": "18f19bfdbb5828d0e1cd0fc0120c517ae530946670a65db74beef63283a3a0bd",
++    "prebuilts/system/lib64/libkeymasterdeviceutils.so": "3249ee9b5ae48ce508db153d5d4363f858ea89fd9988034e69aab650f5482d95",
++    "prebuilts/system/lib64/libkeymasterutils.so": "ea03c0f7496bbe9f4a0261f5a45f7dbd5e8b1cc7b5a00adaf97651471d3337de",
++    "prebuilts/system/lib64/libnos_citadeld_proxy.so": "64806f849b3036bc5baad8b85e59005025c84c72cad89abbe3440a48923b5a58",
++    "prebuilts/system/lib64/libprotobuf-cpp-full-3.9.1.so": "496c959c87b19edc6609adee3830010d610567856db178f1bf6e0118d78c6507",
++    "prebuilts/system/lib64/libprotobuf-cpp-lite-3.9.1.so": "381f6808025986df306a1d946cafc4f27d3e5970274ef717838e18787c823e21",
++    "prebuilts/system/lib64/libqcbor.so": "97be84949ae575538487c163ceb58679e71853f5116ddf10ba96fe536730079d",
++    "prebuilts/system/lib64/libqtikeymaster4.so": "5b1e8fe043e5454bcc78f96f30181dc1338839d87eedf43228c5948d2a9ac04c",
++    "prebuilts/system/lib64/librpmb.so": "47a43d206641b9eb0f63bb687a3d5cb1afb5e640ec1d245d5a43530d1c1303d2",
++    "prebuilts/system/lib64/libspcom.so": "780548688490b08d253f4a83d3ea91fa981119db70ebf29d2ddd26ee08e79f1e",
++    "prebuilts/system/lib64/libssd.so": "030e81fd07ee62391025b9cea78da4b4145173be77f585b1e0498a392c478e2e",
++    "prebuilts/system/lib64/nos_app_avb.so": "9514679aa4a8354bed3afa2cc7fd2a219d2e3f0e12aade24aa04b6d7363bd4f1",
++    "prebuilts/system/lib64/nos_app_weaver.so": "c38e982eee05722a46eeab2ed36f8ad65e3eb4143b46ee079ed37446396f4372",
++    "prebuilts/system/bin/android.hardware.gatekeeper@1.0-service-qti": "8cc647ec04aef764a2c22d021a7a670e274abe65d59aa3a8a99ae5fbc2d35ac7",
++    "prebuilts/system/bin/android.hardware.keymaster@4.0-service-qti": "706f0b04c4d491d5344c67c8b2ee7edb22b4ff105c4515a69bbbaab77f8837e2",
++    "prebuilts/system/bin/android.hardware.keymaster@4.1-service.citadel": "b84a298821e3c3e3058a077bf8bef02b90d1c5c1923c03ed2185ce3f5bc4eff5",
++    "prebuilts/system/bin/android.hardware.weaver@1.0-service.citadel": "88119c81969bccbc73c535308ef80f665488efb93518b62cf81269a5a0c663a8",
++    "prebuilts/system/bin/citadeld": "e98c802eac07c6dae2d5ad11334ccfbd9f90065d8235d5c52c4068933c574d3b",
++    "prebuilts/system/bin/qseecomd": "252c2b47a54001bea9d5e5c5849a12c87410f5dd62baa802ab44b0fe5bc1e677"
++  }
++}
+diff --git a/release/avatar-update.json b/release/avatar-update.json
+deleted file mode 100644
+index 3c28c64..0000000
+--- a/release/avatar-update.json
++++ /dev/null
+@@ -1,15 +0,0 @@
+-{
+-  "base_run_id": 38088385193,
+-  "base_artifact_id": 11684997889,
+-  "base_artifact_name": "OrangeFox-unofficial-coral-38088385193-1",
+-  "base_commit": "6d3c046d8a33ff4194a1e9f17f835c3786c87767",
+-  "base_image_sha256": "31d542c1f26750c6fcbfb529ad5465e97339e44363dd6962ab44dc807ec30cab",
+-  "avatar_sha256": "f4818aa7acc691df48fa82e75654a9e205129730b24f42f3922efe6c4bf2470b",
+-  "avbtool_revision": "5ace2cf8e07d0807f6e92f649b400f1bd473e1ed",
+-  "avbtool_sha256": "a9ec360fc5395db9b72d36c03af59ff984f4eefcc349dc32a556de7f8ed892ab",
+-  "channel_url": "https://t.me/pixel4seriesupdates",
+-  "tag": "R12.0-coral-unofficial-20261011-channel",
+-  "notes_file": "release/notes-channel-2026-10-11.md",
+-  "release_title": "OrangeFox R12.0 Unofficial \u2014 Coral \u2014 About channel fix",
+-  "publication_revision": 4
+-}
+diff --git a/release/latest.json b/release/latest.json
+deleted file mode 100644
+index 754aac9..0000000
+--- a/release/latest.json
++++ /dev/null
+@@ -1 +0,0 @@
+-{"run_id": 38146842841, "artifact_id": 11704908074, "artifact_name": "OrangeFox-coral-about-38146842841-1", "commit": "7616706662323bbb0b694c6ec9c7308909968c7e", "image_sha256": "8be2b80a778f0f67b22713e050465d891f759dda68ad934a41e40aa007344c1a", "tag": "R12.0-coral-unofficial-20261011-channel", "prerelease": false, "theme_update": true, "publication_revision": 1}
+diff --git a/release/maintainer-update.json b/release/maintainer-update.json
+deleted file mode 100644
+index 7628acc..0000000
+--- a/release/maintainer-update.json
++++ /dev/null
+@@ -1 +0,0 @@
+-{"run_id": 38088385193, "artifact_name": "OrangeFox-unofficial-coral-38088385193-1", "commit": "6d3c046d8a33ff4194a1e9f17f835c3786c87767", "tag": "R12.0-coral-unofficial-20261011", "maintainer": "Hecker", "support_url": "https://t.me/pixel4seriesofficial", "publication_revision": 2}
+diff --git a/release/notes-2026-10-10.md b/release/notes-2026-10-10.md
+deleted file mode 100644
+index 242153a..0000000
+--- a/release/notes-2026-10-10.md
++++ /dev/null
+@@ -1,18 +0,0 @@
+-Unofficial OrangeFox R12.0 for **Google Pixel 4 XL (coral)**.
+-
+-This is the exact image tested on Coral with Infinity Android 17, built from commit `5e77df717d12e4527b0d412bf3dd5bd9f484f43e` in [run 38071785744](https://github.com/its-hecker/orangefox_device_google_coral/actions/runs/38071785744).
+-
+-Tested: boot, touch, ADB, MTP, PIN/data decryption, automatic battery percentage, settings, brightness changes and theme reload. The supplied logs show no recovery restart during the captured session. ROM ZIP installation and longer-running stability remain untested.
+-
+-Temporary boot on **coral**:
+-```sh
+-fastboot getvar product
+-fastboot boot OrangeFox-unofficial-coral.img
+-```
+-
+-SHA256: `bcc72599d8ed8721e9576c5d59dbed1e9821cc61a650299e501fcbc555c88dcd`
+-
+-Maintainer: [Hecker (its-hecker)](https://github.com/its-hecker)
+-Support: [Pixel 4 Series](https://t.me/pixel4seriesofficial)
+-
+-The release tag identifies the publication configuration. The image source is the earlier commit recorded above and in `device-tree-commit.txt`. Maintainer/About additions are in the source for future builds; this release preserves the tested binary. Thanks to OrangeFox and TeamWin; original source notices are preserved. Source manifest and kernel provenance are included with the image.
+diff --git a/release/notes-2026-10-11.md b/release/notes-2026-10-11.md
+deleted file mode 100644
+index 84ba5c9..0000000
+--- a/release/notes-2026-10-11.md
++++ /dev/null
+@@ -1,18 +0,0 @@
+-Unofficial OrangeFox R12.0 for **Google Pixel 4 XL (coral)**.
+-
+-The About screen now identifies **Hecker** as maintainer and displays the Pixel 4 Series support URL. This source build replaces the default "Testing build (unofficial)" maintainer entry.
+-
+-Maintainer: [Hecker (its-hecker)](https://github.com/its-hecker)
+-Support: [Pixel 4 Series](https://t.me/pixel4seriesofficial)
+-
+-The recovery image was built from commit `6d3c046d8a33ff4194a1e9f17f835c3786c87767` in [run 38088385193](https://github.com/its-hecker/orangefox_device_google_coral/actions/runs/38088385193). The release tag records the publication configuration; `device-tree-commit.txt` records the image's source commit. Checksums, the source manifest and kernel provenance are included.
+-
+-The previous image was tested on Coral with Infinity Android 17: boot, touch, ADB, MTP, PIN/data decryption, automatic battery percentage, settings, brightness changes and theme reload. The tester also reported successful ROM ZIP flashing and boot to Android, and a small file transferred in recovery remained visible after reboot. This build keeps the same functional configuration and adds maintainer/About details. It has passed structural, startup-configuration and packaged About checks; device testing of this new image remains pending.
+-
+-Temporary boot on **coral**:
+-```sh
+-fastboot getvar product
+-fastboot boot OrangeFox-unofficial-coral.img
+-```
+-
+-The [previous tested image](https://github.com/its-hecker/orangefox_device_google_coral/releases/tag/R12.0-coral-unofficial-20261010) remains available. Thanks to OrangeFox and TeamWin; original source notices are preserved.
+diff --git a/release/notes-avatar-2026-10-11.md b/release/notes-avatar-2026-10-11.md
+deleted file mode 100644
+index e80e566..0000000
+--- a/release/notes-avatar-2026-10-11.md
++++ /dev/null
+@@ -1,28 +0,0 @@
+-Unofficial OrangeFox R12.0 for **Google Pixel 4 XL (coral)**.
+-
+-The About card now reads **Hecker (Maintainer)** and uses the selected cat
+-profile picture. The Pixel 4 Series support link remains underneath.
+-
+-Maintainer: [Hecker (its-hecker)](https://github.com/its-hecker)
+-Support: [Pixel 4 Series](https://t.me/pixel4seriesofficial)
+-
+-This image packages two theme assets into the [previous maintainer image](https://github.com/its-hecker/orangefox_device_google_coral/releases/tag/R12.0-coral-unofficial-20261011), which the tester confirmed boots and displays Hecker. Its base image SHA256 is `31d542c1f26750c6fcbfb529ad5465e97339e44363dd6962ab44dc807ec30cab`; the compiled recovery and kernel came from source commit `6d3c046d8a33ff4194a1e9f17f835c3786c87767`.
+-
+-Packaging checks require the kernel, DTB, every other ramdisk payload and all
+-entry permissions/owners to remain identical. The boot ID and AVB hash footer
+-are regenerated with the source build's original AVB properties. Runtime,
+-boot-header, maintainer-label and exact-avatar checks also passed.
+-
+-`theme-update.json` records the base and packaging provenance.
+-`device-tree-commit.txt` identifies the theme packaging source; the original
+-kernel provenance and pinned Android source manifest are included. This
+-specific repackaged image still needs a device boot test.
+-
+-Temporary boot on **coral**:
+-```sh
+-fastboot getvar product
+-fastboot boot OrangeFox-unofficial-coral.img
+-```
+-
+-The previous release remains available. Original OrangeFox and TeamWin credits
+-and source notices are preserved.
+diff --git a/release/notes-channel-2026-10-11.md b/release/notes-channel-2026-10-11.md
+deleted file mode 100644
+index 4b19c50..0000000
+--- a/release/notes-channel-2026-10-11.md
++++ /dev/null
+@@ -1,27 +0,0 @@
+-Unofficial OrangeFox R12.0 for **Google Pixel 4 XL (coral)**.
+-
+-The About card now displays **Channel: t.me/pixel4seriesupdates**, replacing
+-the previous support-group label. **Hecker (Maintainer)** and the cat avatar
+-are included.
+-
+-Channel: [Pixel 4 Series Updates](https://t.me/pixel4seriesupdates)
+-Maintainer: [Hecker (its-hecker)](https://github.com/its-hecker)
+-
+-This is a theme update to the tested recovery. The recovery program, kernel,
+-DTB, decryption and battery configuration are preserved. Checks verify the
+-new channel label, exact avatar, runtime configuration, boot ID and AVB hash.
+-The About XML is the only ramdisk file changed relative to the previous
+-avatar release. This specific image still needs a device boot test.
+-
+-The original compiled recovery and kernel are from commit
+-`6d3c046d8a33ff4194a1e9f17f835c3786c87767`; `theme-update.json` records the
+-base image, channel and theme packaging provenance. Kernel metadata,
+-source manifest and checksums are included.
+-
+-Temporary boot on **coral**:
+-```sh
+-fastboot getvar product
+-fastboot boot OrangeFox-unofficial-coral.img
+-```
+-
+-The [previous avatar release](https://github.com/its-hecker/orangefox_device_google_coral/releases/tag/R12.0-coral-unofficial-20261011-avatar) remains available. Original OrangeFox and TeamWin credits and source notices are preserved.
+diff --git a/scripts/build.sh b/scripts/build.sh
+index bd94f37..77b658a 100755
+--- a/scripts/build.sh
++++ b/scripts/build.sh
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env bash
+ set -eo pipefail
+ port_root=$(cd "$(dirname "$0")/.." && pwd)
++python3 "$port_root/scripts/validate_source.py"
+ build_root=${1:?Usage: build.sh ABSOLUTE_BUILD_DIRECTORY [all|kernel|recovery] [CHECKPOINT_DIRECTORY]}
+ build_stage=${2:-all}
+ checkpoint=${3:-$port_root/kernel-checkpoint}
+@@ -67,7 +68,7 @@ python3 "$port_root/scripts/test_prepdecrypt.py" "$build_root/android/device/qco
+ if [[ "$build_stage" = recovery ]]; then
+     python3 "$port_root/scripts/kernel_checkpoint.py" import "$build_root/android" "$port_root" "$checkpoint"
+ fi
+-export FOX_BUILD_DEVICE=coral
++export FOX_BUILD_DEVICE=flame
+ source device/google/coral/vendorsetup.sh
+ # Android envsetup is an interactive shell initializer and uses optional
+ # probes that return nonzero. Source it without errexit, then check that the
+@@ -93,7 +94,7 @@ resource_monitor() {
+         df -h "$build_root"
+         # Ninja buffers each task's output until completion. Show kernel progress
+         # and resource use while the long kernel task is still running.
+-        kernel_out="$build_root/android/out/target/product/coral/obj/KERNEL_OBJ"
++        kernel_out="$build_root/android/out/target/product/flame/obj/KERNEL_OBJ"
+         if [[ -d "$kernel_out" ]]; then
+             echo "Kernel object files: $(find "$kernel_out" -name '*.o' -type f | wc -l)"
+         fi
+@@ -105,8 +106,10 @@ resource_monitor > >(tee "$port_root/logs/resources.log") 2>&1 &
+ monitor_pid=$!
+ trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+ echo "Building stage $build_stage with $build_jobs jobs; host CPUs: $(nproc)"
+-lunch twrp_coral-eng
+-boot_os_version=$(get_build_var CORAL_RECOVERY_OS_VERSION)
++lunch twrp_flame-eng
++[[ $(get_build_var TARGET_DEVICE) = flame ]]
++[[ $(get_build_var TARGET_BOOTLOADER_BOARD_NAME) = flame ]]
++boot_os_version=$(get_build_var FLORAL_RECOVERY_OS_VERSION)
+ boot_os_patch=$(get_build_var PLATFORM_SECURITY_PATCH)
+ boot_firmware_patch=$(get_build_var BOOT_SECURITY_PATCH)
+ maintainer=$(get_build_var OF_MAINTAINER)
+@@ -124,7 +127,7 @@ if [[ "$build_stage" = kernel ]]; then
+     exit 0
+ fi
+ mka bootimage -j"$build_jobs" 2>&1 | tee "$port_root/logs/build.log"
+-out=out/target/product/coral
++out=out/target/product/flame
+ image="$out/boot.img"
+ test -s "$image"
+ if [[ "$build_stage" = recovery ]]; then
+@@ -133,8 +136,9 @@ if [[ "$build_stage" = recovery ]]; then
+ else
+     python3 "$port_root/scripts/validate_image.py" "$image" --keymaster-version "$OF_DEFAULT_KEYMASTER_VERSION" "${version_checks[@]}"
+ fi
+-cp "$image" "$port_root/artifacts/OrangeFox-unofficial-coral.img"
++cp "$image" "$port_root/artifacts/OrangeFox-unofficial-flame.img"
++cp "$port_root/port/provenance.json" "$port_root/artifacts/port-provenance.json"
+ repo manifest -r -o "$port_root/artifacts/source-manifest.xml"
+ git -C "$port_root" rev-parse HEAD > "$port_root/artifacts/device-tree-commit.txt"
+ cd "$port_root/artifacts"
+-sha256sum OrangeFox-unofficial-coral.img > SHA256SUMS
++sha256sum OrangeFox-unofficial-flame.img > SHA256SUMS
+diff --git a/scripts/kernel_checkpoint.py b/scripts/kernel_checkpoint.py
+index 681c349..2694dc0 100644
+--- a/scripts/kernel_checkpoint.py
++++ b/scripts/kernel_checkpoint.py
+@@ -27,6 +27,7 @@ def identity(android, device):
+     if sources['kernel/google/msm-4.14'] != KERNEL_COMMIT:
+         raise ValueError('Kernel source does not match the pinned revision')
+     return {
++        'product': 'flame',
+         'device_commit': revision(device),
+         'sources': sources,
+         'defconfig_sha256': digest(android / 'kernel/google/msm-4.14/arch/arm64/configs/floral_defconfig'),
+@@ -51,7 +52,7 @@ def check_dtb(path):
+ 
+ def export_checkpoint(android, device, checkpoint):
+     expected = identity(android, device)
+-    out = android / 'out/target/product/coral'
++    out = android / 'out/target/product/flame'
+     files = {
+         'Image.lz4': out / 'kernel',
+         'dtb.img': out / 'dtb.img',
+@@ -105,8 +106,8 @@ def import_checkpoint(android, device, checkpoint):
+     destination.mkdir(parents=True)
+     shutil.copy2(checkpoint / 'Image.lz4', destination / 'Image.lz4')
+     (destination / 'dtb').mkdir()
+-    shutil.copy2(checkpoint / 'dtb.img', destination / 'dtb/coral.dtb')
+-    out = android / 'out/target/product/coral'
++    shutil.copy2(checkpoint / 'dtb.img', destination / 'dtb/flame.dtb')
++    out = android / 'out/target/product/flame'
+     for name in metadata['files']:
+         if name.startswith('modules/'):
+             target = out / name.removeprefix('modules/')
+diff --git a/scripts/materialize_tree.sh b/scripts/materialize_tree.sh
+new file mode 100755
+index 0000000..8073b30
+--- /dev/null
++++ b/scripts/materialize_tree.sh
+@@ -0,0 +1,42 @@
++#!/usr/bin/env bash
++# Seed an empty Flame repository without flattening the Coral commit history.
++set -euo pipefail
++base=f67f624c0b94213f4447f8ab6039c80de9b82a21
++[[ ${GITHUB_REPOSITORY:-} = its-hecker/orangefox_device_google_flame ]] || {
++    echo 'This importer is restricted to the Flame repository' >&2
++    exit 1
++}
++if [[ -f flame/BoardConfig.mk ]]; then
++    sha=$(git rev-parse HEAD)
++else
++    seed=$(git rev-parse HEAD)
++    branch=${GITHUB_REF_NAME:?Missing branch name}
++    [[ "$branch" = main || "$branch" = orangefox-flame ]]
++    patch_file=$(mktemp "${RUNNER_TEMP:-/tmp}/flame-port.XXXXXX.patch")
++    trap 'rm -f "$patch_file"' EXIT
++    cp .bootstrap/flame.patch "$patch_file"
++    git fetch --no-tags https://github.com/its-hecker/orangefox_device_google_coral.git "$base"
++    [[ $(git rev-parse FETCH_HEAD) = "$base" ]]
++    git checkout --detach "$base"
++    git apply --index --check "$patch_file"
++    git apply --index "$patch_file"
++    git config user.name 'github-actions[bot]'
++    git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
++    tree=$(git write-tree)
++    sha=$(git commit-tree "$tree" -p "$base" -p "$seed" <<'MESSAGE'
++Port the tested Coral OrangeFox fixes to the Flame TWRP target
++
++Preserve the pinned Coral history and isolate the Pixel 4 target, kernel
++checkpoint, runtime validation and build artifacts in the Flame repository.
++Flame hardware validation is pending.
++MESSAGE
++)
++    git checkout -B "$branch" "$sha"
++    git push origin "HEAD:refs/heads/$branch"
++    # Populate the new repository's default branch too; never force an update.
++    if [[ "$branch" != main ]]; then
++        git push origin HEAD:refs/heads/main
++    fi
++fi
++git merge-base --is-ancestor "$base" "$sha"
++printf 'sha=%s\n' "$sha" >> "${GITHUB_OUTPUT:?Missing Actions output file}"
+diff --git a/scripts/package_about_update.py b/scripts/package_about_update.py
+deleted file mode 100644
+index 786ebbc..0000000
+--- a/scripts/package_about_update.py
++++ /dev/null
+@@ -1,186 +0,0 @@
+-#!/usr/bin/env python3
+-"""Replace only Coral's About XML and avatar in a checksum-pinned boot image.
+-
+-Preserve every cpio entry's metadata and all other payloads. Update the v2
+-boot ID and regenerate its unsigned AVB hash footer with the original
+-salt/properties, using the source build's pinned AOSP avbtool.
+-"""
+-import argparse
+-import gzip
+-import hashlib
+-import json
+-import pathlib
+-import re
+-import struct
+-import subprocess
+-import sys
+-import tempfile
+-
+-
+-def sha(data):
+-    return hashlib.sha256(data).hexdigest()
+-
+-
+-def align(size, boundary):
+-    return (size + boundary - 1) // boundary * boundary
+-
+-
+-def entries(data):
+-    result, offset = [], 0
+-    while offset + 110 <= len(data):
+-        header = data[offset:offset + 110]
+-        assert header[:6] == b'070701', 'Expected newc without CRC'
+-        size = int(header[54:62], 16)
+-        namesize = int(header[94:102], 16)
+-        assert namesize > 0
+-        name_end = offset + 110 + namesize
+-        assert name_end <= len(data) and data[name_end - 1] == 0
+-        name = data[offset + 110:name_end - 1].decode()
+-        path = pathlib.PurePosixPath(name)
+-        assert not path.is_absolute() and '..' not in path.parts
+-        start = align(name_end, 4)
+-        assert start + size <= len(data)
+-        result.append((name, header, data[offset + 110:name_end], data[start:start + size]))
+-        offset = align(start + size, 4)
+-        if name == 'TRAILER!!!':
+-            assert not data[offset:].strip(b'\0'), 'Unexpected archive following trailer'
+-            assert len({r[0] for r in result}) == len(result), 'Duplicate cpio path'
+-            return result
+-    raise ValueError('Missing cpio trailer')
+-
+-
+-def replace_entries(original, replacements):
+-    result, seen = bytearray(), set()
+-    for name, header, encoded_name, payload in entries(original):
+-        if name in replacements:
+-            assert int(header[14:22], 16) & 0o170000 == 0o100000
+-            payload = replacements[name]
+-            header = header[:54] + f'{len(payload):08x}'.encode() + header[62:]
+-            seen.add(name)
+-        result.extend(header + encoded_name)
+-        result.extend(b'\0' * (align(len(result), 4) - len(result)))
+-        result.extend(payload)
+-        result.extend(b'\0' * (align(len(result), 4) - len(result)))
+-    assert seen == set(replacements)
+-    result.extend(b'\0' * (align(len(result), 512) - len(result)))
+-    # Compare every entry, including symlinks, modes, owners and timestamps.
+-    for before, after in zip(entries(original), entries(result)):
+-        assert before[0] == after[0] and before[2] == after[2]
+-        if before[0] in replacements:
+-            assert before[1][:54] + before[1][62:] == after[1][:54] + after[1][62:]
+-            assert after[3] == replacements[before[0]]
+-        else:
+-            assert before == after, 'Unexpected ramdisk change: ' + before[0]
+-    return bytes(result)
+-
+-
+-def parts(image):
+-    assert image[:8] == b'ANDROID!' and len(image) == 67108864
+-    kernel_size = struct.unpack_from('<I', image, 8)[0]
+-    ramdisk_size = struct.unpack_from('<I', image, 16)[0]
+-    page, version = struct.unpack_from('<II', image, 36)
+-    assert (page, version) == (4096, 2)
+-    assert struct.unpack_from('<I', image, 24)[0] == 0, 'Unexpected second stage'
+-    assert struct.unpack_from('<IQI', image, 1632) == (0, 0, 1660), 'Unexpected DTBO/header'
+-    dtb_size = struct.unpack_from('<I', image, 1648)[0]
+-    assert min(kernel_size, ramdisk_size, dtb_size) > 0
+-    ramdisk_start = page + align(kernel_size, page)
+-    dtb_start = ramdisk_start + align(ramdisk_size, page)
+-    return image[:page], image[page:page + kernel_size], image[ramdisk_start:ramdisk_start + ramdisk_size], image[dtb_start:dtb_start + dtb_size]
+-
+-
+-def boot_id(kernel, ramdisk, dtb):
+-    # AOSP mkbootimg v2: kernel, ramdisk, absent second and DTBO, then DTB.
+-    digest = hashlib.sha1()
+-    for payload in (kernel, ramdisk, b'', b'', dtb):
+-        digest.update(payload)
+-        digest.update(struct.pack('<I', len(payload)))
+-    return digest.digest() + b'\0' * 12
+-
+-
+-def avb_info(tool, image):
+-    info = subprocess.check_output([sys.executable, str(tool), 'info_image', '--image', str(image)], text=True)
+-    assert re.search(r'^Algorithm:\s+NONE$', info, re.M), 'Only the unsigned source image is supported'
+-    assert re.findall(r'^\s*Flags:\s+(\d+)$', info, re.M) == ['0', '0']
+-    assert re.search(r'^Rollback Index:\s+0$', info, re.M)
+-    assert re.search(r'^Rollback Index Location:\s+0$', info, re.M)
+-    assert re.search(r'^\s+Partition Name:\s+boot$', info, re.M)
+-    assert re.search(r'^\s+Hash Algorithm:\s+sha256$', info, re.M)
+-    assert info.count('Hash descriptor:') == 1
+-    salt = re.search(r'^\s+Salt:\s+([0-9a-f]+)$', info, re.M).group(1)
+-    props = re.findall(r"^\s+Prop: ([^ ]+) -> '([^'\n]+)'$", info, re.M)
+-    assert {k for k, _ in props} == {'com.android.build.boot.fingerprint', 'com.android.build.boot.os_version', 'com.android.build.boot.security_patch'}
+-    return salt, props
+-
+-
+-def main():
+-    parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument('base_image', type=pathlib.Path)
+-    parser.add_argument('output', type=pathlib.Path)
+-    parser.add_argument('--avatar', type=pathlib.Path, required=True)
+-    parser.add_argument('--avb-tool', type=pathlib.Path, required=True)
+-    parser.add_argument('--config', type=pathlib.Path, default=pathlib.Path('release/avatar-update.json'))
+-    args = parser.parse_args()
+-    config = json.loads(args.config.read_text())
+-    image = args.base_image.read_bytes()
+-    assert sha(image) == config['base_image_sha256'], 'Source image checksum mismatch'
+-    assert sha(args.avatar.read_bytes()) == config['avatar_sha256'], 'Selected avatar checksum mismatch'
+-    assert sha(args.avb_tool.read_bytes()) == config['avbtool_sha256'], 'AVB tool checksum mismatch'
+-    assert not args.output.exists(), 'Output image must be new'
+-    header, kernel, packed, dtb = parts(image)
+-    assert header[576:608] == boot_id(kernel, packed, dtb), 'Source boot ID is invalid'
+-    salt, props = avb_info(args.avb_tool, args.base_image)
+-    archive = gzip.decompress(packed)
+-    files = {e[0]: e[3] for e in entries(archive)}
+-    old_label = b'<text>%of_maintainer%</text>'
+-    settings = files['twres/pages/settings.xml']
+-    assert settings.count(old_label) == 1
+-    old_link = b'<text>Support: t.me/pixel4seriesofficial</text>'
+-    assert settings.count(old_link) == 1
+-    channel_url = config['channel_url']
+-    assert re.fullmatch(r'https://t\.me/[A-Za-z0-9_]+', channel_url), 'Invalid channel URL'
+-    channel_label = ('<text>Channel: ' + channel_url.removeprefix('https://') + '</text>').encode()
+-    settings = settings.replace(old_label, b'<text>%of_maintainer% (Maintainer)</text>').replace(old_link, channel_label)
+-    replacements = {
+-        'twres/pages/settings.xml': settings,
+-        'twres/images/Default/About/maintainer.png': args.avatar.read_bytes(),
+-    }
+-    updated = gzip.compress(replace_entries(archive, replacements), compresslevel=9, mtime=0)
+-    new_header = bytearray(header)
+-    struct.pack_into('<I', new_header, 16, len(updated))
+-    new_header[576:608] = boot_id(kernel, updated, dtb)
+-    assert new_header[:16] + new_header[20:576] + new_header[608:] == header[:16] + header[20:576] + header[608:]
+-    result = bytearray(new_header)
+-    for payload in (kernel, updated, dtb):
+-        result.extend(payload)
+-        result.extend(b'\0' * (align(len(result), 4096) - len(result)))
+-    args.output.parent.mkdir(parents=True, exist_ok=True)
+-    args.output.write_bytes(result)
+-    cmd = [sys.executable, str(args.avb_tool), 'add_hash_footer', '--image', str(args.output),
+-           '--partition_size', '67108864', '--partition_name', 'boot', '--algorithm', 'NONE', '--salt', salt]
+-    for k, value in props:
+-        cmd.extend(['--prop', k + ':' + value])
+-    subprocess.run(cmd, check=True)
+-    # avbtool resolves a hash descriptor's partition name to boot.img.
+-    with tempfile.TemporaryDirectory() as temporary:
+-        verification = pathlib.Path(temporary) / 'boot.img'
+-        verification.symlink_to(args.output.resolve())
+-        subprocess.run([sys.executable, str(args.avb_tool), 'verify_image', '--image', str(verification)], check=True)
+-    assert avb_info(args.avb_tool, args.output) == (salt, props), 'AVB properties changed'
+-    after_header, after_kernel, after_ramdisk, after_dtb = parts(args.output.read_bytes())
+-    assert after_header == new_header and after_kernel == kernel and after_dtb == dtb
+-    assert gzip.decompress(after_ramdisk) == replace_entries(archive, replacements)
+-    provenance = {
+-        'base_image_sha256': sha(image), 'base_device_commit': config['base_commit'],
+-        'packaging_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+-        'modified_ramdisk_paths': sorted(replacements), 'avatar_sha256': config['avatar_sha256'],
+-        'channel_url': channel_url,
+-        'kernel_sha256': sha(kernel), 'dtb_sha256': sha(dtb),
+-        'image_sha256': sha(args.output.read_bytes()), 'avbtool_revision': config['avbtool_revision'],
+-    }
+-    args.output.with_name('theme-update.json').write_text(json.dumps(provenance, indent=2) + '\n')
+-    print('Verified: only the two About assets changed; kernel, DTB, all other ramdisk entries and AVB properties preserved')
+-
+-
+-if __name__ == '__main__':
+-    main()
+diff --git a/scripts/prepare_host.sh b/scripts/prepare_host.sh
+index 8569bdc..4a12132 100644
+--- a/scripts/prepare_host.sh
++++ b/scripts/prepare_host.sh
+@@ -9,11 +9,11 @@ chmod +x "$HOME/bin/repo"
+ echo "$HOME/bin" >> "$GITHUB_PATH"
+ git config --global user.name recovery-builder
+ git config --global user.email recovery-builder@users.noreply.github.com
+-coral_swap_file="$RUNNER_TEMP/orangefox-swap"
+-sudo fallocate -l 8G "$coral_swap_file"
+-sudo chmod 600 "$coral_swap_file"
+-sudo mkswap "$coral_swap_file"
+-sudo swapon "$coral_swap_file"
++flame_swap_file="$RUNNER_TEMP/orangefox-swap"
++sudo fallocate -l 8G "$flame_swap_file"
++sudo chmod 600 "$flame_swap_file"
++sudo mkswap "$flame_swap_file"
++sudo swapon "$flame_swap_file"
+ free -h
+ df -h
+ 
+diff --git a/scripts/test_slider_render.py b/scripts/test_slider_render.py
+index 9380885..a50706c 100755
+--- a/scripts/test_slider_render.py
++++ b/scripts/test_slider_render.py
+@@ -41,7 +41,7 @@ def main():
+                 raise RuntimeError(f'Original Coral overread did not reproduce: {result.returncode}\n{result.stdout}{result.stderr}')
+             print('Reproduced SIGSEGV: 128x152 copy from a guarded 128x128 slider handle')
+         else:
+-            for case in ('coral', 'uniform', 'wide', 'hover', 'left_edge', 'fallback'):
++            for case in ('coral', 'flame', 'uniform', 'wide', 'hover', 'left_edge', 'fallback'):
+                 subprocess.run([str(binary), case], check=True)
+ 
+ 
+diff --git a/scripts/validate_image.py b/scripts/validate_image.py
+index f112b60..fc20cd1 100755
+--- a/scripts/validate_image.py
++++ b/scripts/validate_image.py
+@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description=__doc__)
+ parser.add_argument('image', type=pathlib.Path)
+ parser.add_argument('--kernel', type=pathlib.Path)
+ parser.add_argument('--dtb', type=pathlib.Path)
+-parser.add_argument('--keymaster-version', help='Check Coral decryption startup using the build configuration')
++parser.add_argument('--keymaster-version', help='Check Flame decryption startup using the build configuration')
+ parser.add_argument('--os-version', help='Expected Keymaster OS version in the boot header')
+ parser.add_argument('--os-patch-level', help='Expected system patch month in the boot header (YYYY-MM-DD)')
+ parser.add_argument('--avb-tool', type=pathlib.Path, help='Build-tree avbtool.py for inspecting boot AVB metadata')
+@@ -22,12 +22,12 @@ parser.add_argument('--support-url', help='Expected support URL on the packaged
+ parser.add_argument('--channel-url', help='Expected channel URL on the packaged About page')
+ args = parser.parse_args()
+ image = args.image.read_bytes()
+-assert 1660 <= len(image) <= 64 * 1024 * 1024, 'Invalid coral boot image size'
++assert 1660 <= len(image) <= 64 * 1024 * 1024, 'Invalid Flame boot image size'
+ assert image[:8] == b'ANDROID!', 'Missing Android boot magic'
+ kernel_size, = struct.unpack_from('<I', image, 8)
+ ramdisk_size, = struct.unpack_from('<I', image, 16)
+ page_size, header_version = struct.unpack_from('<II', image, 36)
+-assert header_version == 2, f'Expected coral header v2, got {header_version}'
++assert header_version == 2, f'Expected Flame header v2, got {header_version}'
+ assert page_size == 4096, f'Unexpected page size {page_size}'
+ version_field, = struct.unpack_from('<I', image, 44)
+ os_version = version_field >> 11
+diff --git a/scripts/validate_recovery_runtime.py b/scripts/validate_recovery_runtime.py
+index 2a5af92..7ae9fb1 100755
+--- a/scripts/validate_recovery_runtime.py
++++ b/scripts/validate_recovery_runtime.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Check Coral's packaged startup services; this cannot test device hardware."""
++"""Check Flame's packaged startup services; this cannot test device hardware."""
+ import gzip
+ import hashlib
+ import pathlib
+@@ -103,20 +103,22 @@ def runtime_errors(files, keymaster_version):
+         if not files.get(path, b'').startswith(b'\x7fELF\x02'):
+             errors.append(f'Missing 64-bit recovery library: {path}')
+ 
+-    device_init = files.get('init.recovery.coral.rc', b'').decode()
++    device_init = files.get('init.recovery.flame.rc', b'').decode()
++    if not device_init:
++        errors.append('Missing Flame recovery init file: init.recovery.flame.rc')
+     if init_properties.get('prepdecrypt.setpatch') != 'true':
+-        errors.append('Coral must enable installed ROM version properties on init, before Keymaster startup')
++        errors.append('Flame must enable installed ROM version properties on init, before Keymaster startup')
+     if not files.get('system/bin/resetprop'):
+         errors.append('Missing resetprop for installed ROM version properties')
+     if 'import /init.recovery.qcom_decrypt.rc' not in device_init:
+-        errors.append('Coral init does not import the decryption services')
++        errors.append('Flame init does not import the decryption services')
+     try:
+         manifest = ET.fromstring(files['vendor/etc/vintf/manifest.xml'])
+         keymaster = next(h for h in manifest.findall('hal')
+                          if h.findtext('name') == 'android.hardware.keymaster')
+         instances = {n.text for n in keymaster.findall('fqname')}
+         if not {'@4.0::IKeymasterDevice/default', '@4.1::IKeymasterDevice/strongbox'} <= instances:
+-            errors.append('Recovery manifest must declare both Coral Keymaster instances')
++            errors.append('Recovery manifest must declare both Floral Keymaster instances')
+     except (KeyError, StopIteration, ET.ParseError):
+         errors.append('Missing or invalid recovery Keymaster manifest')
+     try:
+diff --git a/scripts/validate_source.py b/scripts/validate_source.py
+new file mode 100644
+index 0000000..1923948
+--- /dev/null
++++ b/scripts/validate_source.py
+@@ -0,0 +1,52 @@
++#!/usr/bin/env python3
++"""Reject mismatched device targets or drift in the inherited recovery fixes."""
++import hashlib
++import json
++import pathlib
++import re
++
++
++def validate(root):
++    provenance = json.loads((root / 'port/provenance.json').read_text())
++    if provenance['device'] != 'flame' or provenance['lunch_target'] != 'twrp_flame-eng':
++        raise ValueError('This branch must select the Flame recovery product')
++    checks = {
++        'twrp_flame.mk': (
++            r'^PRODUCT_DEVICE\s*:=\s*flame\s*$',
++            r'^PRODUCT_NAME\s*:=\s*twrp_flame\s*$',
++            r'inherit-product, device/google/coral/device-flame\.mk',
++        ),
++        'device-flame.mk': (r'^PRODUCT_HARDWARE\s*:=\s*flame\s*$',),
++        'flame/BoardConfig.mk': (
++            r'^\s*TARGET_BOOTLOADER_BOARD_NAME\s*:=\s*flame\s*$',
++            r'^\s*TARGET_SCREEN_DENSITY\s*:=\s*440\s*$',
++            r'include device/google/coral/ci/prebuilt-kernel\.mk',
++        ),
++        'vendorsetup.sh': (
++            r'^export FOX_BUILD_DEVICE=flame$',
++            r'^export OF_DEFAULT_KEYMASTER_VERSION=4\.x$',
++            r'^export FOX_AB_DEVICE=1$',
++        ),
++        'scripts/build.sh': (
++            r'^lunch twrp_flame-eng$',
++            r'^out=out/target/product/flame$',
++        ),
++        'scripts/validate_recovery_runtime.py': (r'init\.recovery\.flame\.rc',),
++    }
++    for name, patterns in checks.items():
++        source = (root / name).read_text()
++        for pattern in patterns:
++            if not re.search(pattern, source, re.MULTILINE):
++                raise ValueError(f'Device selection check failed: {name}: {pattern}')
++    for name, expected in provenance['inherited_sha256'].items():
++        actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
++        if actual != expected:
++            raise ValueError(f'Inherited Coral fix or shared firmware changed: {name}')
++    workflows = {p.name for p in (root / '.github/workflows').glob('*.yml')}
++    if workflows != {'build.yml'} or (root / 'release/latest.json').exists():
++        raise ValueError('Stale Coral release publication configuration is present')
++    print('Source checks passed: Flame target, checkpoint hook and inherited Coral fixes')
++
++
++if __name__ == '__main__':
++    validate(pathlib.Path(__file__).resolve().parent.parent)
+diff --git a/tests/slider_render_harness.cpp b/tests/slider_render_harness.cpp
+index 99f4bf8..9ebfda6 100644
+--- a/tests/slider_render_harness.cpp
++++ b/tests/slider_render_harness.cpp
+@@ -80,12 +80,14 @@ int main(int argc, char** argv) {
+     assert(argc == 2);
+     const std::string name = argv[1];
+     const bool uniform = name == "uniform";
+-    const int image_size = uniform ? 96 : 128;
++    const int image_size = (uniform || name == "flame") ? 96 : 128;
+     Image handle(image_size, image_size);
+     Image hover(160, 160);
+     GUISliderValue slider;
+     slider.mHandleImage = &handle;
+     if (uniform) slider.mSliderW = slider.mSliderH = 96;
++    // Flame: 1080x2280 scales the square SVG to 96x96, XML height to 114.
++    if (name == "flame") { slider.mSliderW = 96; slider.mSliderH = 114; }
+     if (name == "wide") { slider.mSliderW = 152; slider.mSliderH = 128; }
+     if (name == "hover") { slider.mHandleHoverImage = &hover; slider.mDragging = true; }
+     if (name == "left_edge") slider.mValuePct = 0;
+diff --git a/twrp.mk b/twrp.mk
+index b21044b..265d46c 100644
+--- a/twrp.mk
++++ b/twrp.mk
+@@ -3,11 +3,11 @@ BOARD_USES_QCOM_FBE_DECRYPTION := true
+ DISABLE_ARTIFACT_PATH_REQUIREMENTS := true
+ # Match the tested Infinity Android 17 system's Keymaster version metadata.
+ # This is not a claim that the Android 12.1 recovery has newer platform fixes.
+-CORAL_RECOVERY_OS_VERSION := 17
++FLORAL_RECOVERY_OS_VERSION := 17
+ PLATFORM_SECURITY_PATCH := 2026-09-01
+ # The 12.1 build uses PLATFORM_VERSION_LAST_STABLE for the boot header; changing
+ # PLATFORM_VERSION alone does not change its encoded OS version.
+-BOARD_MKBOOTIMG_ARGS += --os_version $(CORAL_RECOVERY_OS_VERSION)
++BOARD_MKBOOTIMG_ARGS += --os_version $(FLORAL_RECOVERY_OS_VERSION)
+ 
+ TARGET_RECOVERY_TWRP_LIB := \
+     librecovery_twrp_coral \
+@@ -23,7 +23,7 @@ TW_THEME := portrait_hdpi
+ BOARD_SUPPRESS_SECURE_ERASE := true
+ TARGET_RECOVERY_QCOM_RTC_FIX := true
+ TW_INPUT_BLACKLIST := "hbtp_vm"
+-# Coral S6E3HC2 panel: qcom,mdss-dsi-bl-max-level = <0x3ff>.
++# Floral panels use a 10-bit backlight (Flame SOFEF01, Coral S6E3HC2).
+ TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+ TW_MAX_BRIGHTNESS := 1023
+ TW_DEFAULT_BRIGHTNESS := 512
+diff --git a/twrp_flame.mk b/twrp_flame.mk
+index 02050bf..8f48572 100644
+--- a/twrp_flame.mk
++++ b/twrp_flame.mk
+@@ -71,4 +71,4 @@ PRODUCT_MANUFACTURER := Google
+ PRODUCT_BRAND := Android
+ PRODUCT_NAME := twrp_flame
+ PRODUCT_DEVICE := flame
+-PRODUCT_MODEL := AOSP on flame
++PRODUCT_MODEL := Pixel 4
+diff --git a/vendorsetup.sh b/vendorsetup.sh
+index 7042e04..a47309a 100755
+--- a/vendorsetup.sh
++++ b/vendorsetup.sh
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env bash
+-export FOX_BUILD_DEVICE=coral
++export FOX_BUILD_DEVICE=flame
+ export FOX_AB_DEVICE=1
+ export OF_DISABLE_MIUI_SPECIFIC_FEATURES=1
+-# Coral uses Qualcomm 4.0/default and Citadel 4.1/strongbox together.
++# Floral uses Qualcomm 4.0/default and Citadel 4.1/strongbox together.
+ # The qcom_decrypt 4.x trigger starts both when the vendor manifest is unavailable.
+ export OF_DEFAULT_KEYMASTER_VERSION=4.x
+ export FOX_VARIANT=Unofficial
