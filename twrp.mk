@@ -3,11 +3,11 @@ BOARD_USES_QCOM_FBE_DECRYPTION := true
 DISABLE_ARTIFACT_PATH_REQUIREMENTS := true
 # Match the tested Infinity Android 17 system's Keymaster version metadata.
 # This is not a claim that the Android 12.1 recovery has newer platform fixes.
-CORAL_RECOVERY_OS_VERSION := 17
+FLORAL_RECOVERY_OS_VERSION := 17
 PLATFORM_SECURITY_PATCH := 2026-09-01
 # The 12.1 build uses PLATFORM_VERSION_LAST_STABLE for the boot header; changing
 # PLATFORM_VERSION alone does not change its encoded OS version.
-BOARD_MKBOOTIMG_ARGS += --os_version $(CORAL_RECOVERY_OS_VERSION)
+BOARD_MKBOOTIMG_ARGS += --os_version $(FLORAL_RECOVERY_OS_VERSION)
 
 TARGET_RECOVERY_TWRP_LIB := \
     librecovery_twrp_coral \
@@ -23,7 +23,7 @@ TW_THEME := portrait_hdpi
 BOARD_SUPPRESS_SECURE_ERASE := true
 TARGET_RECOVERY_QCOM_RTC_FIX := true
 TW_INPUT_BLACKLIST := "hbtp_vm"
-# Coral S6E3HC2 panel: qcom,mdss-dsi-bl-max-level = <0x3ff>.
+# Floral panels use a 10-bit backlight (Flame SOFEF01, Coral S6E3HC2).
 TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
 TW_MAX_BRIGHTNESS := 1023
 TW_DEFAULT_BRIGHTNESS := 512

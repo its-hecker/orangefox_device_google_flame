@@ -1,80 +1,95 @@
-# OrangeFox for Google Pixel 4 XL (coral)
+# OrangeFox for Google Pixel 4 (flame)
 
 Maintainer: **Hecker** ([its-hecker](https://github.com/its-hecker)).
-Support: [Pixel 4 Series](https://t.me/pixel4seriesofficial).
-Channel: [Pixel 4 Series Updates](https://t.me/pixel4seriesupdates).
+Updates: [Pixel 4 Series Updates](https://t.me/pixel4seriesupdates).
+Support: [Pixel 4 ROMs](https://t.me/Pixel4Roms).
 
-[Download the tested release](https://github.com/its-hecker/orangefox_device_google_coral/releases/tag/R12.0-coral-unofficial-20261010).
+[Builds and logs](https://github.com/its-hecker/orangefox_device_google_flame/actions/workflows/build.yml)
 
-Experimental port for Infinity Android 17 on Pixel 4 XL (coral). The latest
-tester report and logs confirm PIN/data decryption and automatic battery
-startup after the fixes. Touch, ADB and MTP were reported working during
-bring-up. Settings, brightness changes and a theme reload completed without a
-recorded recovery crash or restart. The tester subsequently reported a successful ROM ZIP
-installation and boot to Android, plus a small recovery-transferred file
-surviving reboot. Console stability and longer runs still need validation. These results apply to the tested
-Coral/Infinity installation.
+OrangeFox R12.0 / Android 12.1 recovery source for **Pixel 4 (flame)**, carrying
+forward the functional fixes from our Coral recovery. The initial configuration
+targets Infinity Android 17. **Flame device testing is pending.** A successful
+build proves compilation and packaging, not working hardware or decryption.
 
-Based on TeamWin/android_device_google_coral, android-12.1 commit b3f760ee3d17805e895c0d6e0387fd59d1f39120. Original copyright and licensing notices are preserved.
+## Shared TWRP source
 
-CI builds the pinned kernel and DTB bundle first and saves a checkpoint artifact.
-A fresh recovery job verifies its checksums and source revisions, then packages
-that kernel without compiling it again. If recovery fails, rerun the failed job
-to reuse the completed kernel checkpoint. Both jobs stream resource diagnostics
-to the Actions log and save detailed logs when the runner remains available.
+[TeamWin's official Flame page](https://twrp.me/google/googlepixel4.html) links to
+[TeamWin/android_device_google_coral](https://github.com/TeamWin/android_device_google_coral),
+the same common Floral tree used for Pixel 4 XL. It contains `twrp_flame.mk`,
+`device-flame.mk` and `flame/BoardConfig.mk` alongside the Coral files.
 
-For a local source build, run `bash scripts/build.sh /absolute/build/directory`.
-The optional `kernel` and `recovery` stages use `kernel-checkpoint/` by default.
-The image artifact includes checksums, the source manifest and kernel provenance;
-the validator checks header v2, the 64 MiB partition limit, and exact checkpoint
-kernel and DTB contents, plus the boot header's OS/system-patch values and
-the separate boot AVB firmware patch. Device testing is described in [TESTING.md](TESTING.md).
+Use this repository's **orangefox-flame** branch. The original stable Coral
+repository is not modified. The Coral history is preserved through commit
+`f67f624c0b94213f4447f8ab6039c80de9b82a21`; see
+[port/provenance.json](port/provenance.json) for source pins and fixes.
 
-The first Infinity device test reached the OrangeFox splash but blocked waiting
-for Qualcomm Keymaster 4.0/default. Coral also has Citadel 4.1/strongbox;
-the fallback now uses `4.x` to start both services. The ramdisk includes the
-QTI Gatekeeper implementation that was missing in that test. CI checks these
-startup triggers and packaged libraries before uploading the image.
+The checkout path deliberately stays **device/google/coral**, because that is
+the upstream common-tree path. The build product is **twrp_flame-eng**, the
+bootloader board is **flame**, and output is **out/target/product/flame**.
+The Flame board keeps its own 440-DPI setting and device overlays.
 
-The next test was subsequently reported as a Flame cross-device boot. The
-associated logs record crashes after opening Screen settings and the console,
-but identify the hardware as `coral` with a 1440x3040 framebuffer. Matching
-device identity and logs still need confirmation. The
-[slider source patch](patches/README.md) fixes an independently reproduced
-image-buffer overread at the logged theme scales. CI exercises the patched
-renderer against guarded buffers; its relationship to the device crashes
-is supported by a later Coral settings test with no recorded crash, although
-the console still needs testing. Those earlier logs also show `/data` metadata decryption
-failing with Keymaster error `-38`; the later Coral test described below reports
-working decryption after the version-metadata fix.
+## Carried-over fixes
 
-The earlier Coral photograph shows an empty battery reading. The packaged
-Health 2.1 service was disabled and only started by the fastbootd trigger;
-normal recovery now starts it on boot. CI checks the startup trigger, service,
-implementation and manifest. The tester confirmed that manually starting the
-service restored a 51% reading and charging indicator, and the fresh logs show
-Health registration succeeding. The latest logs confirm the service starts on
-normal boot and reports 34%; the tester confirms the percentage appears
-automatically. The device checks are in [TESTING.md](TESTING.md).
+- Qualcomm Keymaster 4.0/default and Citadel 4.1/strongbox startup, with the
+  missing QTI Gatekeeper implementation and recovery library checks.
+- Installed-ROM version properties before crypto startup, including temporary
+  fastboot boot, and support for both system build.prop layouts.
+- Normal-boot Health 2.1 startup for battery percentage and charging state.
+- Slider handle rendering fix for Screen settings and console, plus host
+  regression coverage for the original image-buffer overread.
+- A/B recovery-as-boot configuration, dynamic-partition support, MTP/ADB,
+  recovery repacking tools and compatible ROM ZIP installation support.
+- Hecker maintainer label, selected cat avatar and corrected Telegram channel.
+- Bounded build parallelism, swap, logs and verified kernel/DTB checkpoints.
 
-The supplied ROM properties identify Android 17, system patch 2026-09-01 and
-vendor patch 2022-10-05. The previous recovery supplied Android 12 and the
-placeholder date 2127-12-31 while `prepdecrypt` skipped ROM version updates
-during temporary fastboot boot. The updated build enables those updates on init,
-before QSEE/Keymaster startup, and supports both system build.prop layouts.
-Its legacy boot header targets Android 17 / September 2026; boot and vendor
-firmware metadata stay at 2022-10-05, matching
-[Infinity's Coral tree](https://github.com/its-hecker/infinity_cnb_android_device_google_coral/blob/b8eb4b5868bd5e3412bb0287361bf2fa63ad8bab/device-common.mk).
-These values align Keymaster metadata with this ROM, not the security fixes
-in recovery's Android 12.1 binaries. CI verifies the startup script with host
-property/mount substitutes.
+Coral testing reported working PIN/data decryption, battery percentage and ROM
+ZIP installation on Infinity Android 17. These are **Coral results**, and are
+not recorded as successful Flame tests. The first Flame image must be tested
+using [TESTING.md](TESTING.md).
 
-[Build 38071785744](https://github.com/its-hecker/orangefox_device_google_coral/actions/runs/38071785744)
-completed successfully for the version-metadata fix at `5e77df7`. On October 10,
-the tester subsequently reported that OrangeFox asks for decryption and data
-decryption works on the Pixel 4 XL. The subsequent `recovery(3).log` confirms
-metadata decryption to `/dev/block/dm-4`, PIN/synthetic-password unlocking of
-user 0, and internal storage at `/data/media/0`. `logcat(3).txt` confirms normal
-boot starts Health 2.1/default. The three latest logs contain no fatal signal,
-recovery exit/restart or kernel fault during the recorded settings test.
-ROM ZIP installation is still untested.
+## Build
+
+Use **Actions → OrangeFox Flame → Run workflow**, selecting `orangefox-flame`.
+CI builds the pinned TeamWin Floral kernel first and saves a checkpoint; a
+fresh runner verifies and packages that exact kernel and DTB bundle. If only
+the recovery job fails, rerun the failed job to reuse the completed checkpoint.
+
+For a local Linux build, install the dependencies listed in
+`scripts/prepare_host.sh` and ensure `repo`, Java 11 and the listed Python
+packages are available. From this checkout run:
+
+```sh
+bash scripts/build.sh /absolute/path/to/empty-build-directory
+```
+
+The script stages this common tree at `device/google/coral`, syncs its
+additional dependencies and builds `twrp_flame-eng`. Use a fresh build directory.
+The optional `kernel` and `recovery` stages share `kernel-checkpoint/`.
+
+Output includes `OrangeFox-unofficial-flame.img`, `SHA256SUMS`, the Android
+source manifest, the device-tree commit and kernel/port provenance. Image checks
+require header v2, a maximum 64 MiB image, matching kernel/DTBs, Flame init,
+crypto/Health startup and the actual packaged maintainer, avatar and channel.
+
+## Initial test
+
+On a Pixel 4 with an unlocked bootloader, verify `fastboot getvar product`
+reports **flame**, check `SHA256SUMS`, then temporarily boot:
+
+```sh
+fastboot boot OrangeFox-unofficial-flame.img
+```
+
+Follow [TESTING.md](TESTING.md) for PIN/data, screen, battery, USB and ROM ZIP
+tests. After those checks pass, the recovery's **Flash current OrangeFox
+recovery** option is the installation route carried over from Coral. Permanent
+installation/repacking on Flame still needs verification with the installed
+ROM kernel; the initial build does not distribute an installer ZIP.
+
+The initial boot-header metadata is Android 17 / September 2026, with boot and
+vendor firmware patch metadata at 2022-10-05, matching the Coral Infinity
+configuration. `prepdecrypt` reads the installed ROM properties at runtime.
+This does not update the Android 12.1 recovery binaries' security fixes or
+establish compatibility with every ROM/encryption configuration.
+
+Original TeamWin, OrangeFox and AOSP copyright and license notices are retained.

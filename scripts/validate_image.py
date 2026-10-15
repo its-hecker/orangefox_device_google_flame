@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('image', type=pathlib.Path)
 parser.add_argument('--kernel', type=pathlib.Path)
 parser.add_argument('--dtb', type=pathlib.Path)
-parser.add_argument('--keymaster-version', help='Check Coral decryption startup using the build configuration')
+parser.add_argument('--keymaster-version', help='Check Flame decryption startup using the build configuration')
 parser.add_argument('--os-version', help='Expected Keymaster OS version in the boot header')
 parser.add_argument('--os-patch-level', help='Expected system patch month in the boot header (YYYY-MM-DD)')
 parser.add_argument('--avb-tool', type=pathlib.Path, help='Build-tree avbtool.py for inspecting boot AVB metadata')
@@ -22,12 +22,12 @@ parser.add_argument('--support-url', help='Expected support URL on the packaged 
 parser.add_argument('--channel-url', help='Expected channel URL on the packaged About page')
 args = parser.parse_args()
 image = args.image.read_bytes()
-assert 1660 <= len(image) <= 64 * 1024 * 1024, 'Invalid coral boot image size'
+assert 1660 <= len(image) <= 64 * 1024 * 1024, 'Invalid Flame boot image size'
 assert image[:8] == b'ANDROID!', 'Missing Android boot magic'
 kernel_size, = struct.unpack_from('<I', image, 8)
 ramdisk_size, = struct.unpack_from('<I', image, 16)
 page_size, header_version = struct.unpack_from('<II', image, 36)
-assert header_version == 2, f'Expected coral header v2, got {header_version}'
+assert header_version == 2, f'Expected Flame header v2, got {header_version}'
 assert page_size == 4096, f'Unexpected page size {page_size}'
 version_field, = struct.unpack_from('<I', image, 44)
 os_version = version_field >> 11

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 port_root=$(cd "$(dirname "$0")/.." && pwd)
+python3 "$port_root/scripts/validate_source.py"
 build_root=${1:?Usage: build.sh ABSOLUTE_BUILD_DIRECTORY [all|kernel|recovery] [CHECKPOINT_DIRECTORY]}
 build_stage=${2:-all}
 checkpoint=${3:-$port_root/kernel-checkpoint}
@@ -67,7 +68,7 @@ python3 "$port_root/scripts/test_prepdecrypt.py" "$build_root/android/device/qco
 if [[ "$build_stage" = recovery ]]; then
     python3 "$port_root/scripts/kernel_checkpoint.py" import "$build_root/android" "$port_root" "$checkpoint"
 fi
-export FOX_BUILD_DEVICE=coral
+export FOX_BUILD_DEVICE=flame
 source device/google/coral/vendorsetup.sh
 # Android envsetup is an interactive shell initializer and uses optional
 # probes that return nonzero. Source it without errexit, then check that the
@@ -93,7 +94,7 @@ resource_monitor() {
         df -h "$build_root"
         # Ninja buffers each task's output until completion. Show kernel progress
         # and resource use while the long kernel task is still running.
-        kernel_out="$build_root/android/out/target/product/coral/obj/KERNEL_OBJ"
+        kernel_out="$build_root/android/out/target/product/flame/obj/KERNEL_OBJ"
         if [[ -d "$kernel_out" ]]; then
             echo "Kernel object files: $(find "$kernel_out" -name '*.o' -type f | wc -l)"
         fi
@@ -105,8 +106,10 @@ resource_monitor > >(tee "$port_root/logs/resources.log") 2>&1 &
 monitor_pid=$!
 trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 echo "Building stage $build_stage with $build_jobs jobs; host CPUs: $(nproc)"
-lunch twrp_coral-eng
-boot_os_version=$(get_build_var CORAL_RECOVERY_OS_VERSION)
+lunch twrp_flame-eng
+[[ $(get_build_var TARGET_DEVICE) = flame ]]
+[[ $(get_build_var TARGET_BOOTLOADER_BOARD_NAME) = flame ]]
+boot_os_version=$(get_build_var FLORAL_RECOVERY_OS_VERSION)
 boot_os_patch=$(get_build_var PLATFORM_SECURITY_PATCH)
 boot_firmware_patch=$(get_build_var BOOT_SECURITY_PATCH)
 maintainer=$(get_build_var OF_MAINTAINER)
@@ -124,7 +127,7 @@ if [[ "$build_stage" = kernel ]]; then
     exit 0
 fi
 mka bootimage -j"$build_jobs" 2>&1 | tee "$port_root/logs/build.log"
-out=out/target/product/coral
+out=out/target/product/flame
 image="$out/boot.img"
 test -s "$image"
 if [[ "$build_stage" = recovery ]]; then
@@ -133,8 +136,9 @@ if [[ "$build_stage" = recovery ]]; then
 else
     python3 "$port_root/scripts/validate_image.py" "$image" --keymaster-version "$OF_DEFAULT_KEYMASTER_VERSION" "${version_checks[@]}"
 fi
-cp "$image" "$port_root/artifacts/OrangeFox-unofficial-coral.img"
+cp "$image" "$port_root/artifacts/OrangeFox-unofficial-flame.img"
+cp "$port_root/port/provenance.json" "$port_root/artifacts/port-provenance.json"
 repo manifest -r -o "$port_root/artifacts/source-manifest.xml"
 git -C "$port_root" rev-parse HEAD > "$port_root/artifacts/device-tree-commit.txt"
 cd "$port_root/artifacts"
-sha256sum OrangeFox-unofficial-coral.img > SHA256SUMS
+sha256sum OrangeFox-unofficial-flame.img > SHA256SUMS

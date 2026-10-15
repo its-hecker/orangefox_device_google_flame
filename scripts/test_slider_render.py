@@ -41,7 +41,7 @@ def main():
                 raise RuntimeError(f'Original Coral overread did not reproduce: {result.returncode}\n{result.stdout}{result.stderr}')
             print('Reproduced SIGSEGV: 128x152 copy from a guarded 128x128 slider handle')
         else:
-            for case in ('coral', 'uniform', 'wide', 'hover', 'left_edge', 'fallback'):
+            for case in ('coral', 'flame', 'uniform', 'wide', 'hover', 'left_edge', 'fallback'):
                 subprocess.run([str(binary), case], check=True)
 
 

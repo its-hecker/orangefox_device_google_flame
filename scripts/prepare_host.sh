@@ -9,11 +9,11 @@ chmod +x "$HOME/bin/repo"
 echo "$HOME/bin" >> "$GITHUB_PATH"
 git config --global user.name recovery-builder
 git config --global user.email recovery-builder@users.noreply.github.com
-coral_swap_file="$RUNNER_TEMP/orangefox-swap"
-sudo fallocate -l 8G "$coral_swap_file"
-sudo chmod 600 "$coral_swap_file"
-sudo mkswap "$coral_swap_file"
-sudo swapon "$coral_swap_file"
+flame_swap_file="$RUNNER_TEMP/orangefox-swap"
+sudo fallocate -l 8G "$flame_swap_file"
+sudo chmod 600 "$flame_swap_file"
+sudo mkswap "$flame_swap_file"
+sudo swapon "$flame_swap_file"
 free -h
 df -h
 

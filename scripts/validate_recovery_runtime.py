@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Coral's packaged startup services; this cannot test device hardware."""
+"""Check Flame's packaged startup services; this cannot test device hardware."""
 import gzip
 import hashlib
 import pathlib
@@ -103,20 +103,22 @@ def runtime_errors(files, keymaster_version):
         if not files.get(path, b'').startswith(b'\x7fELF\x02'):
             errors.append(f'Missing 64-bit recovery library: {path}')
 
-    device_init = files.get('init.recovery.coral.rc', b'').decode()
+    device_init = files.get('init.recovery.flame.rc', b'').decode()
+    if not device_init:
+        errors.append('Missing Flame recovery init file: init.recovery.flame.rc')
     if init_properties.get('prepdecrypt.setpatch') != 'true':
-        errors.append('Coral must enable installed ROM version properties on init, before Keymaster startup')
+        errors.append('Flame must enable installed ROM version properties on init, before Keymaster startup')
     if not files.get('system/bin/resetprop'):
         errors.append('Missing resetprop for installed ROM version properties')
     if 'import /init.recovery.qcom_decrypt.rc' not in device_init:
-        errors.append('Coral init does not import the decryption services')
+        errors.append('Flame init does not import the decryption services')
     try:
         manifest = ET.fromstring(files['vendor/etc/vintf/manifest.xml'])
         keymaster = next(h for h in manifest.findall('hal')
                          if h.findtext('name') == 'android.hardware.keymaster')
         instances = {n.text for n in keymaster.findall('fqname')}
         if not {'@4.0::IKeymasterDevice/default', '@4.1::IKeymasterDevice/strongbox'} <= instances:
-            errors.append('Recovery manifest must declare both Coral Keymaster instances')
+            errors.append('Recovery manifest must declare both Floral Keymaster instances')
     except (KeyError, StopIteration, ET.ParseError):
         errors.append('Missing or invalid recovery Keymaster manifest')
     try:

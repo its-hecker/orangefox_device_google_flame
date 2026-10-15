@@ -1,5 +1,12 @@
 # Recovery source patches
 
+This Flame branch retains all three Coral source patches unchanged. The host
+slider harness also covers Flame's 1080x2280 aspect mismatch (96x96 loaded
+handle versus 96x114 XML dimensions). `init.recovery.device.rc` is packaged
+under the Flame target's name; installed-ROM properties, crypto startup and
+Health startup are the same shared fixes. Coral device-test reports below
+remain historical reference evidence.
+
 `0001-fit-slider-handles-to-scaled-images.patch` applies to
 `gui/slidervalue.cpp` in OrangeFox Recovery `fox_12.1`, tested at
 `cbcc4f713dbef98d76d6d2cfd019b1ebfd9418e9`.

@@ -27,6 +27,7 @@ def identity(android, device):
     if sources['kernel/google/msm-4.14'] != KERNEL_COMMIT:
         raise ValueError('Kernel source does not match the pinned revision')
     return {
+        'product': 'flame',
         'device_commit': revision(device),
         'sources': sources,
         'defconfig_sha256': digest(android / 'kernel/google/msm-4.14/arch/arm64/configs/floral_defconfig'),
@@ -51,7 +52,7 @@ def check_dtb(path):
 
 def export_checkpoint(android, device, checkpoint):
     expected = identity(android, device)
-    out = android / 'out/target/product/coral'
+    out = android / 'out/target/product/flame'
     files = {
         'Image.lz4': out / 'kernel',
         'dtb.img': out / 'dtb.img',
@@ -105,8 +106,8 @@ def import_checkpoint(android, device, checkpoint):
     destination.mkdir(parents=True)
     shutil.copy2(checkpoint / 'Image.lz4', destination / 'Image.lz4')
     (destination / 'dtb').mkdir()
-    shutil.copy2(checkpoint / 'dtb.img', destination / 'dtb/coral.dtb')
-    out = android / 'out/target/product/coral'
+    shutil.copy2(checkpoint / 'dtb.img', destination / 'dtb/flame.dtb')
+    out = android / 'out/target/product/flame'
     for name in metadata['files']:
         if name.startswith('modules/'):
             target = out / name.removeprefix('modules/')

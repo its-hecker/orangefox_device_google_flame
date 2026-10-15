@@ -80,12 +80,14 @@ int main(int argc, char** argv) {
     assert(argc == 2);
     const std::string name = argv[1];
     const bool uniform = name == "uniform";
-    const int image_size = uniform ? 96 : 128;
+    const int image_size = (uniform || name == "flame") ? 96 : 128;
     Image handle(image_size, image_size);
     Image hover(160, 160);
     GUISliderValue slider;
     slider.mHandleImage = &handle;
     if (uniform) slider.mSliderW = slider.mSliderH = 96;
+    // Flame: 1080x2280 scales the square SVG to 96x96, XML height to 114.
+    if (name == "flame") { slider.mSliderW = 96; slider.mSliderH = 114; }
     if (name == "wide") { slider.mSliderW = 152; slider.mSliderH = 128; }
     if (name == "hover") { slider.mHandleHoverImage = &hover; slider.mDragging = true; }
     if (name == "left_edge") slider.mValuePct = 0;
