@@ -52,6 +52,10 @@ if args.os_version or args.boot_security_patch:
         assert len(values) == 1, f'Expected exactly one AVB property {name}, got {values}'
         return values[0]
 
+    fingerprint = avb_property('com.android.build.boot.fingerprint')
+    product = fingerprint.split(':', 1)[0].split('/')[1:]
+    assert product == ['twrp_flame', 'flame'], f'Boot AVB fingerprint does not identify Flame: {fingerprint}'
+
     if args.os_version:
         actual = avb_property('com.android.build.boot.os_version')
         components = tuple(int(v) for v in actual.split('.'))

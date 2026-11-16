@@ -47,7 +47,7 @@ The Flame board keeps its own 440-DPI setting and device overlays.
 
 Coral testing reported working PIN/data decryption, battery percentage and ROM
 ZIP installation on Infinity Android 17. These are **Coral results**, and are
-not recorded as successful Flame tests. The first Flame image must be tested
+not recorded as successful Flame tests. The November Flame image must be tested
 using [TESTING.md](TESTING.md).
 
 ## Build
@@ -73,7 +73,8 @@ The optional `kernel` and `recovery` stages share `kernel-checkpoint/`.
 Output includes `OrangeFox-unofficial-flame.img`, `SHA256SUMS`, the Android
 source manifest, the device-tree commit and kernel/port provenance. Image checks
 require header v2, a maximum 64 MiB image, matching kernel/DTBs, Flame init,
-matching boot metadata, crypto/Health startup, the fresh-data storage fix and
+the Flame product in the AVB fingerprint, matching boot metadata,
+crypto/Health startup, the fresh-data storage fix and
 the packaged maintainer, avatar and channel.
 
 ## Initial test

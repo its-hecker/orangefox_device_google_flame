@@ -19,7 +19,11 @@ def footer_args(makefile, override):
     firmware = re.search(
         r'ifdef BOOT_SECURITY_PATCH\n(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS \+= \\\n.*?)(?:\nendif)',
         source, re.DOTALL).group(1)
-    config = 'PLATFORM_VERSION_LAST_STABLE := 12\nBUILD_FINGERPRINT_FROM_FILE := test/flame\nBOOT_SECURITY_PATCH := 2022-10-05\n'
+    config = (
+        'PLATFORM_VERSION_LAST_STABLE := 12\n'
+        'BUILD_FINGERPRINT_FROM_FILE := Android/twrp_flame/flame:12/SP2A.220405.004/test:eng/test-keys\n'
+        'BOOT_SECURITY_PATCH := 2022-10-05\n'
+    )
     if override:
         config += f'BOARD_AVB_BOOT_OS_VERSION := {override}\n'
     config += rules + '\n' + firmware + '\nall:\n\t@echo $(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS)\n'
@@ -45,6 +49,7 @@ def main():
         ('legacy-avb-version', default, 11, False, 'Boot AVB OS version'),
         ('september-header', configured, 9, False, 'Boot header patch'),
         ('october-header', configured, 10, False, 'Boot header patch'),
+        ('coral-product', [x.replace('/twrp_flame/flame:', '/twrp_coral/coral:') for x in configured], 11, False, 'Boot AVB fingerprint does not identify Flame'),
         ('wrong-firmware-patch', [x.replace('security_patch:2022-10-05', 'security_patch:2026-11-01') for x in configured], 11, False, 'Boot AVB firmware patch'),
         ('duplicate-os-property', configured + ['--prop', 'com.android.build.boot.os_version:12'], 11, False, 'Expected exactly one AVB property'),
     ]
