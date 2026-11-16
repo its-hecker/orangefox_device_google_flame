@@ -1,6 +1,6 @@
 # Recovery source patches
 
-This Flame branch retains all three Coral source patches unchanged. The host
+This Flame branch retains the Coral source patches unchanged. The host
 slider harness also covers Flame's 1080x2280 aspect mismatch (96x96 loaded
 handle versus 96x114 XML dimensions). `init.recovery.device.rc` is packaged
 under the Flame target's name; installed-ROM properties, crypto startup and
@@ -56,3 +56,15 @@ cat avatar, in the existing 192x192 About image resource.
 `OF_MAINTAINER := Hecker` in `twrp.mk` sets that name; the older
 `FOX_MAINTAINER` environment variable does not set this About field. Image
 validation checks the executable, packaged About XML and exact avatar bytes.
+
+`0004-prepare-fresh-data-media.patch` prepares staging storage under
+`/data/media` and `/sdcard` after recovery starts with freshly formatted
+userdata or successfully formats it. It checks for a writable ext4 or f2fs
+mount and refuses to initialize storage over an existing FBE layout. The host
+test exercises the patched startup and Format Data paths.
+
+`0005-match-boot-avb-os-version.patch` gives the boot AVB descriptor its own
+OS version override. Flame declares Android 17 for the descriptor and boot
+header, with a November 2026 header patch month and a 2022-10-05 firmware
+patch. The recovery build SDK remains 32. The host test exercises the compiled
+image validator against Make's footer arguments and real AVB descriptors.

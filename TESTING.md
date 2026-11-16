@@ -1,8 +1,9 @@
 # Pixel 4 (flame) validation
 
-Current status: Flame hardware tests are pending. Source, build and ramdisk
-checks do not establish device functionality. The Coral results remain in the
-preserved Git history and the source pins are in `port/provenance.json`.
+Current status: Flame hardware tests for the November build are pending.
+Source pins are in `port/provenance.json`. The image check requires Android 17
+in the v2 boot header and AVB descriptor, a November 2026 header patch month,
+and the 2022-10-05 boot firmware patch in AVB.
 
 ## First temporary boot
 
@@ -39,8 +40,13 @@ adb shell getprop ro.vendor.build.security_patch
 ```
 
 The first property should be `true`; the others should match the installed
-ROM. The carried-over Infinity defaults are Android 17, 2026-09-01 system patch
-and 2022-10-05 vendor patch. Recovery's compiled SDK remains 32.
+ROM. The build defaults are Android 17, 2026-11-01 system patch and
+2022-10-05 vendor patch. Recovery's compiled SDK remains 32.
+
+On a spare, already-formatted Flame, verify that recovery creates
+`/data/media` and exposes it at `/sdcard` for staging a ROM ZIP. On the
+existing-data test, the PIN prompt and access to pre-existing files are the
+checks that matter.
 
 ## Battery, USB and reboot targets
 

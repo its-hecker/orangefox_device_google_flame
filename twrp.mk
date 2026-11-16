@@ -1,13 +1,15 @@
 OF_MAINTAINER := Hecker
 BOARD_USES_QCOM_FBE_DECRYPTION := true
 DISABLE_ARTIFACT_PATH_REQUIREMENTS := true
-# Match the tested Infinity Android 17 system's Keymaster version metadata.
-# This is not a claim that the Android 12.1 recovery has newer platform fixes.
+# Match HeckerOS Android 17 / November 2026 Keymaster metadata.
+# The recovery binaries still build from Android 12.1.
 FLORAL_RECOVERY_OS_VERSION := 17
-PLATFORM_SECURITY_PATCH := 2026-09-01
+PLATFORM_SECURITY_PATCH := 2026-11-01
 # The 12.1 build uses PLATFORM_VERSION_LAST_STABLE for the boot header; changing
 # PLATFORM_VERSION alone does not change its encoded OS version.
 BOARD_MKBOOTIMG_ARGS += --os_version $(FLORAL_RECOVERY_OS_VERSION)
+# Keep the boot AVB OS descriptor aligned with the header without changing SDK.
+BOARD_AVB_BOOT_OS_VERSION := $(FLORAL_RECOVERY_OS_VERSION)
 
 TARGET_RECOVERY_TWRP_LIB := \
     librecovery_twrp_coral \

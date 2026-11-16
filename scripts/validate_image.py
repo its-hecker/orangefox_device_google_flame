@@ -2,16 +2,17 @@
 """Structural checks only; these cannot prove bootability or decryption."""
 import argparse
 import pathlib
+import re
 import struct
 import subprocess
 import sys
-from validate_recovery_runtime import validate_runtime, validate_branding
+from validate_recovery_runtime import ramdisk_files, validate_runtime, validate_branding
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('image', type=pathlib.Path)
 parser.add_argument('--kernel', type=pathlib.Path)
 parser.add_argument('--dtb', type=pathlib.Path)
 parser.add_argument('--keymaster-version', help='Check Flame decryption startup using the build configuration')
-parser.add_argument('--os-version', help='Expected Keymaster OS version in the boot header')
+parser.add_argument('--os-version', help='Expected Keymaster OS version in the boot header and AVB descriptor')
 parser.add_argument('--os-patch-level', help='Expected system patch month in the boot header (YYYY-MM-DD)')
 parser.add_argument('--avb-tool', type=pathlib.Path, help='Build-tree avbtool.py for inspecting boot AVB metadata')
 parser.add_argument('--boot-security-patch', help='Expected boot firmware patch in the AVB property descriptor')
@@ -20,6 +21,7 @@ parser.add_argument('--maintainer-label', help='Expected literal About label con
 parser.add_argument('--maintainer-avatar', type=pathlib.Path, help='Expected packaged 192x192 maintainer PNG')
 parser.add_argument('--support-url', help='Expected support URL on the packaged About page')
 parser.add_argument('--channel-url', help='Expected channel URL on the packaged About page')
+parser.add_argument('--fresh-data-media', action='store_true', help='Require the compiled fresh-userdata storage fix')
 args = parser.parse_args()
 image = args.image.read_bytes()
 assert 1660 <= len(image) <= 64 * 1024 * 1024, 'Invalid Flame boot image size'
@@ -40,12 +42,24 @@ if args.os_version:
     assert os_components == expected, f'Boot header OS version {os_components} does not match {expected}'
 if args.os_patch_level:
     assert patch_month == args.os_patch_level[:7], f'Boot header patch {patch_month} does not match {args.os_patch_level[:7]}'
-if args.boot_security_patch:
-    assert args.avb_tool, 'An AVB tool is required to check the boot firmware patch'
+if args.os_version or args.boot_security_patch:
+    assert args.avb_tool, 'An AVB tool is required to check the boot version metadata'
     avb_info = subprocess.check_output(
         [sys.executable, str(args.avb_tool), 'info_image', '--image', str(args.image)], text=True)
-    expected = f"Prop: com.android.build.boot.security_patch -> '{args.boot_security_patch}'"
-    assert expected in avb_info, 'Boot AVB firmware patch differs from the device configuration'
+
+    def avb_property(name):
+        values = re.findall(r"^\s*Prop: " + re.escape(name) + r" -> '([^']*)'\s*$", avb_info, re.MULTILINE)
+        assert len(values) == 1, f'Expected exactly one AVB property {name}, got {values}'
+        return values[0]
+
+    if args.os_version:
+        actual = avb_property('com.android.build.boot.os_version')
+        components = tuple(int(v) for v in actual.split('.'))
+        components += (0,) * (3 - len(components))
+        assert components == expected, f'Boot AVB OS version {actual} does not match {args.os_version}'
+    if args.boot_security_patch:
+        actual = avb_property('com.android.build.boot.security_patch')
+        assert actual == args.boot_security_patch, 'Boot AVB firmware patch differs from the device configuration'
 assert kernel_size > 0 and ramdisk_size > 0, 'Missing kernel or recovery ramdisk'
 align = lambda size: (size + page_size - 1) // page_size * page_size
 second_size, = struct.unpack_from('<I', image, 24)
@@ -59,11 +73,15 @@ if args.kernel:
 if args.dtb:
     dtb_offset = minimum - dtb_size
     assert image[dtb_offset:dtb_offset + dtb_size] == args.dtb.read_bytes(), 'Boot image DTBs differ from the verified checkpoint'
+ramdisk_offset = page_size + align(kernel_size)
+ramdisk = image[ramdisk_offset:ramdisk_offset + ramdisk_size]
 if args.keymaster_version:
-    ramdisk_offset = page_size + align(kernel_size)
-    validate_runtime(image[ramdisk_offset:ramdisk_offset + ramdisk_size], args.keymaster_version)
+    validate_runtime(ramdisk, args.keymaster_version)
+if args.fresh_data_media:
+    recovery = ramdisk_files(ramdisk).get('system/bin/recovery', b'')
+    marker = b'Fresh userdata: prepared /data/media staging storage; Android will initialize FBE users.'
+    assert marker in recovery, 'Fresh-data storage implementation is missing from the recovery executable'
 if args.maintainer or args.support_url or args.channel_url or args.maintainer_label or args.maintainer_avatar:
-    ramdisk_offset = page_size + align(kernel_size)
-    validate_branding(image[ramdisk_offset:ramdisk_offset + ramdisk_size], args.maintainer, args.support_url,
+    validate_branding(ramdisk, args.maintainer, args.support_url,
                      args.maintainer_label, args.maintainer_avatar, args.channel_url)
 print(f'Structural checks passed: {len(image)} bytes; kernel, ramdisk and DTB present; OS {os_components}, system patch {patch_month}')

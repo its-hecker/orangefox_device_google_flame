@@ -6,10 +6,10 @@ Support: [Pixel 4 ROMs](https://t.me/Pixel4Roms).
 
 [Builds and logs](https://github.com/its-hecker/orangefox_device_google_flame/actions/workflows/build.yml)
 
-OrangeFox R12.0 / Android 12.1 recovery source for **Pixel 4 (flame)**, carrying
-forward the functional fixes from our Coral recovery. The initial configuration
-targets Infinity Android 17. **Flame device testing is pending.** A successful
-build proves compilation and packaging, not working hardware or decryption.
+OrangeFox R12.0 / Android 12.1 recovery source for **Pixel 4 (flame)**. This
+branch aligns the boot and Keymaster metadata with HeckerOS Android 17's
+November 2026 update and carries forward the Coral storage fixes.
+**Flame device testing of this build is pending.**
 
 ## Shared TWRP source
 
@@ -18,10 +18,9 @@ build proves compilation and packaging, not working hardware or decryption.
 the same common Floral tree used for Pixel 4 XL. It contains `twrp_flame.mk`,
 `device-flame.mk` and `flame/BoardConfig.mk` alongside the Coral files.
 
-Use this repository's **orangefox-flame** branch. The original stable Coral
-repository is not modified. The Coral history is preserved through commit
-`f67f624c0b94213f4447f8ab6039c80de9b82a21`; see
-[port/provenance.json](port/provenance.json) for source pins and fixes.
+Use this repository's **fix/november-asb-20261112** branch. See
+[port/provenance.json](port/provenance.json) for the original Coral base and the
+November update's reference commit.
 
 The checkout path deliberately stays **device/google/coral**, because that is
 the upstream common-tree path. The build product is **twrp_flame-eng**, the
@@ -34,6 +33,10 @@ The Flame board keeps its own 440-DPI setting and device overlays.
   missing QTI Gatekeeper implementation and recovery library checks.
 - Installed-ROM version properties before crypto startup, including temporary
   fastboot boot, and support for both system build.prop layouts.
+- Boot header and AVB descriptor report Android 17, with November system
+  patch metadata and the 2022-10-05 boot and vendor firmware patch.
+- Recovery storage becomes available on freshly formatted userdata. Existing
+  Android FBE keys and PIN decryption follow their normal path.
 - Normal-boot Health 2.1 startup for battery percentage and charging state.
 - Slider handle rendering fix for Screen settings and console, plus host
   regression coverage for the original image-buffer overread.
@@ -49,7 +52,8 @@ using [TESTING.md](TESTING.md).
 
 ## Build
 
-Use **Actions → OrangeFox Flame → Run workflow**, selecting `orangefox-flame`.
+Use **Actions → OrangeFox Flame → Run workflow**, selecting
+`fix/november-asb-20261112`.
 CI builds the pinned TeamWin Floral kernel first and saves a checkpoint; a
 fresh runner verifies and packages that exact kernel and DTB bundle. If only
 the recovery job fails, rerun the failed job to reuse the completed checkpoint.
@@ -69,7 +73,8 @@ The optional `kernel` and `recovery` stages share `kernel-checkpoint/`.
 Output includes `OrangeFox-unofficial-flame.img`, `SHA256SUMS`, the Android
 source manifest, the device-tree commit and kernel/port provenance. Image checks
 require header v2, a maximum 64 MiB image, matching kernel/DTBs, Flame init,
-crypto/Health startup and the actual packaged maintainer, avatar and channel.
+matching boot metadata, crypto/Health startup, the fresh-data storage fix and
+the packaged maintainer, avatar and channel.
 
 ## Initial test
 
@@ -86,10 +91,7 @@ recovery** option is the installation route carried over from Coral. Permanent
 installation/repacking on Flame still needs verification with the installed
 ROM kernel; the initial build does not distribute an installer ZIP.
 
-The initial boot-header metadata is Android 17 / September 2026, with boot and
-vendor firmware patch metadata at 2022-10-05, matching the Coral Infinity
-configuration. `prepdecrypt` reads the installed ROM properties at runtime.
-This does not update the Android 12.1 recovery binaries' security fixes or
-establish compatibility with every ROM/encryption configuration.
+`prepdecrypt` reads the installed ROM properties at runtime. The recovery
+binaries retain their Android 12.1 security patch coverage.
 
 Original TeamWin, OrangeFox and AOSP copyright and license notices are retained.

@@ -1,7 +1,7 @@
 name: OrangeFox Flame
 on:
   push:
-    branches: [main, orangefox-flame]
+    branches: [main, orangefox-flame, fix/november-asb-20261112]
     paths-ignore: [README.md, TESTING.md, 'docs/**']
   workflow_dispatch:
 permissions:

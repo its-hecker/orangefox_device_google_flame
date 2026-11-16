@@ -2,7 +2,7 @@
   "device": "flame",
   "device_name": "Google Pixel 4",
   "repository": "its-hecker/orangefox_device_google_flame",
-  "branch": "orangefox-flame",
+  "branch": "fix/november-asb-20261112",
   "checkout_path": "device/google/coral",
   "lunch_target": "twrp_flame-eng",
   "teamwin_repository": "TeamWin/android_device_google_coral",
@@ -11,6 +11,7 @@
   "flame_official_source_page": "https://twrp.me/google/googlepixel4.html",
   "coral_repository": "its-hecker/orangefox_device_google_coral",
   "coral_commit": "f67f624c0b94213f4447f8ab6039c80de9b82a21",
+  "coral_november_asb_commit": "06c8ac5543fa5f50bbe18078e64cdbb68abe9900",
   "kernel_repository": "TeamWin/android_kernel_google_msm-4.14",
   "kernel_commit": "9d2fb45d1fc6e11ac7e03e73c772b69ce158ea0a",
   "coral_functional_commits": {
@@ -24,7 +25,7 @@
     "976aff151e4f": "Maintainer label and selected cat avatar",
     "1152841ae04f": "Pixel 4 Series Updates channel in About"
   },
-  "flame_hardware_status": "Untested; Coral results are reference evidence only",
+  "flame_hardware_status": "November build pending Flame device testing",
   "inherited_sha256": {
     "init.recovery.device.rc": "b2950d76a1410a4bcad430693bcbfdd2b12000383e86952e38addc70e39ef6d0",
     "BoardConfig-common.mk": "0e321251c7e2ef01233cdfba1ef0bca68e68b3b0a971e2b39af40634122c473b",
@@ -35,6 +36,8 @@
     "patches/0001-fit-slider-handles-to-scaled-images.patch": "65b782ffbb30d9e5442cfc6ddcdde293a27c7782081993dcc5921d1666bdf4e9",
     "patches/0002-read-system-properties-from-both-layouts.patch": "c8ce2ec97caa8e53945a181ea7e0dc4fdafaa5fd97786b9540f18d33621515a9",
     "patches/0003-show-coral-maintainer-support.patch": "e9d7066f2eef9646c0f79133a597c580bce30bd39fdb135e77abbd900f48c1e0",
+    "patches/0004-prepare-fresh-data-media.patch": "7a741d7e07a8edd3b06aa7b0f2c884e28aa678a464a8ebc497cd2a1f878330fa",
+    "patches/0005-match-boot-avb-os-version.patch": "b63733aece6760cfd9a77204596ebc34fe202ea02c0830a3bfdf220c0ca3cf16",
     "prebuilts/system/lib64/android.hardware.authsecret@1.0-impl.nos.so": "661896820d326ac189ad2ce4106ed1b0b18a962f0f2dcd66bcc8b5b7fa2f866c",
     "prebuilts/system/lib64/android.hardware.keymaster@4.1-impl.nos.so": "7821defd34f4d2bb68946d9f0215510c589769d95b81aa1cb76271065d35a717",
     "prebuilts/system/lib64/android.hardware.oemlock@1.0-impl.nos.so": "3d6892ccfcf49467c881f71dce2b7f1816608f3da0e0d81dfca3c68ec71c86b9",
