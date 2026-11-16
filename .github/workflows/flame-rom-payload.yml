@@ -1,0 +1,73 @@
+name: Publish Flame ROM recovery payload
+
+on:
+  push:
+    branches: [publish/hecker-recovery2-flame-ramdisk-50efc8d]
+    paths: [.github/workflows/flame-rom-payload.yml]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: flame-rom-payload-50efc8d
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/publish/hecker-recovery2-flame-ramdisk-50efc8d'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_COMMIT: 50efc8dc93f6f348bafcb24ec64de35a6dae7489
+      PAYLOAD_TAG: hecker-recovery2-flame-ramdisk-50efc8d
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          artifact-ids: 14249377280
+          run-id: 43899564692
+          github-token: ${{ github.token }}
+          path: recovery-ci
+          merge-multiple: true
+      - name: Verify and extract the recovery ramdisk
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import struct
+
+          artifact = Path('recovery-ci')
+          assert (artifact / 'device-tree-commit.txt').read_text().strip() == os.environ['SOURCE_COMMIT']
+          image = (artifact / 'OrangeFox-unofficial-flame.img').read_bytes()
+          assert hashlib.sha256(image).hexdigest() == 'a3ce5794ead22683e73b9d642e0394d81c64d59be7c76bdfb5d3cf7107bce5da'
+          assert image[:8] == b'ANDROID!'
+          kernel_size, ramdisk_size = struct.unpack_from('<I4xI', image, 8)
+          page, version = struct.unpack_from('<II', image, 36)
+          assert (page, version) == (4096, 2)
+          offset = page + (kernel_size + page - 1) // page * page
+          ramdisk = image[offset:offset + ramdisk_size]
+          assert len(ramdisk) == 31246054
+          assert hashlib.sha256(ramdisk).hexdigest() == '7be16045dba3cce2797348efd285ab3c0f63c4470fabc4335cc0ded8f9f4a3f4'
+          assert hashlib.sha256((artifact / 'source-manifest.xml').read_bytes()).hexdigest() == '6b941c4da81b40cdc9ca676378d9522e4068019a4fdd5c1ccc3d40e2b4e54db2'
+          Path('hecker-recovery2-flame.cpio.gz').write_bytes(ramdisk)
+          PY
+      - name: Publish versioned build input
+        run: |
+          set -euo pipefail
+          payload=hecker-recovery2-flame.cpio.gz
+          if gh release view "$PAYLOAD_TAG" >/dev/null 2>&1; then
+            gh release download "$PAYLOAD_TAG" --pattern "$payload" --output existing.cpio.gz
+            cmp "$payload" existing.cpio.gz
+          else
+            # GitHub Actions cannot create a release tag at a historical commit
+            # with workflow changes. The artifact's verified source SHA is in
+            # the release notes and source manifest.
+            gh release create "$PAYLOAD_TAG" "$payload" recovery-ci/source-manifest.xml \
+              --prerelease --latest=false \
+              --title 'Hecker Recovery 2.0 Flame ROM build input' \
+              --notes "November OrangeFox ramdisk for HeckerOS Flame KSU hybrid recovery. Source commit $SOURCE_COMMIT. Verified artifact: https://github.com/$GH_REPO/actions/runs/43899564692"
+          fi
